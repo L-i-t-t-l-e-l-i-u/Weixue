@@ -2,7 +2,7 @@
 
 面向 1-7 年级思辨课堂的 AI 辅助评估系统。基于 Kuhn（1999）认识论发展模型，为不同认知梯段的学生匹配差异化评估维度，让 AI 承担多维度评分和评语草稿等机械劳动，教师专注于教学判断和个性化反馈。
 
-**在线演示**：[https://l-i-t-t-l-e-l-i-u.github.io/weixue/](https://l-i-t-t-l-e-l-i-u.github.io/weixue/)
+**在线演示**：[https://l-i-t-t-l-e-l-i-u.github.io/Weixue/](https://l-i-t-t-l-e-l-i-u.github.io/Weixue/)
 
 ## 问题与立场
 

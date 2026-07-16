@@ -12,5 +12,5 @@ dist/
 build/
 *.log
 uploads/
-guihua.docx
+*.docx
 *_unlocked.pdf
