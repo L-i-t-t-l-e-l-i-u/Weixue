@@ -1,0 +1,16 @@
+.idea/
+.env
+.venv/
+seewo-grading-demo.html
+seewo-grading-demo.jsx
+node_modules/
+__pycache__/
+.vscode/
+*.db
+*.pyc
+dist/
+build/
+*.log
+uploads/
+guihua.docx
+*_unlocked.pdf
