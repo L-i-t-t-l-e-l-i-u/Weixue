@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import useStore from '../stores/gradingStore';
-import * as api from '../api/client';
+import { computePrepAnalytics } from '../utils/analytics';
 
 const DIM_LABELS = {
   clarity: '清晰性', interpretation: '解释力', evidence_awareness: '证据意识',
@@ -16,42 +16,43 @@ const dimColor = (val) => {
 };
 
 export default function PrepPage() {
-  const { courseId } = useStore();
-  const [analytics, setAnalytics] = useState([]);
+  const { courseId, students, topics, responses } = useStore();
   const [lessonPlan, setLessonPlan] = useState([]);
   const [notes, setNotes] = useState({});
-  const [loading, setLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState('');
+  const initializedFor = useRef(null);
+
+  const analytics = useMemo(
+    () => computePrepAnalytics(students, topics, Object.values(responses).flat()),
+    [students, topics, responses],
+  );
 
   useEffect(() => {
-    if (!courseId) return;
-    api.getPrepAnalytics(courseId)
-      .then(data => {
-        setAnalytics(data);
-        const storageKey = `weixue-prep-plan-${courseId}`;
-        try {
-          const saved = JSON.parse(localStorage.getItem(storageKey));
-          if (saved && Array.isArray(saved.lessonPlan) && saved.notes && typeof saved.notes === 'object') {
-            const validTopicIds = new Set(data.map(item => item.topic_id));
-            setLessonPlan(saved.lessonPlan.filter(topicId => validTopicIds.has(topicId)));
-            setNotes(saved.notes);
-            setSaveStatus('saved');
-            return;
-          }
-        } catch (error) {
-          console.warn('无法读取本机讲评计划，将使用自动建议。', error);
-        }
-        // Prefer weak topics; when all averages are above the threshold, keep the
-        // lowest-ranked topics available so the teacher can still build a plan.
-        const weakTopics = data.filter(d => d.weak_dimensions.length > 0);
-        const suggestedTopics = weakTopics.length > 0 ? weakTopics : data;
-        setLessonPlan(suggestedTopics.slice(0, 3).map(d => d.topic_id));
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [courseId]);
+    if (!courseId || analytics.length === 0 || initializedFor.current === courseId) return;
+    initializedFor.current = courseId;
+    const storageKey = `weixue-prep-plan-${courseId}`;
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey));
+      if (saved && Array.isArray(saved.lessonPlan) && saved.notes && typeof saved.notes === 'object') {
+        const validTopicIds = new Set(analytics.map(item => item.topic_id));
+        setLessonPlan(saved.lessonPlan.filter(topicId => validTopicIds.has(topicId)));
+        setNotes(saved.notes);
+        setSaveStatus('saved');
+        return;
+      }
+    } catch (error) {
+      console.warn('无法读取本机讲评计划，将使用自动建议。', error);
+    }
+    // Prefer weak topics; when all averages are above the threshold, keep the
+    // lowest-ranked topics available so the teacher can still build a plan.
+    const weakTopics = analytics.filter(d => d.weak_dimensions.length > 0);
+    const suggestedTopics = weakTopics.length > 0 ? weakTopics : analytics;
+    setLessonPlan(suggestedTopics.slice(0, 3).map(d => d.topic_id));
+  }, [courseId, analytics]);
 
-  if (loading) return <div className="text-slate-400 py-10 text-center">加载讲评数据...</div>;
+  if (!courseId || analytics.length === 0) {
+    return <div className="text-slate-400 py-10 text-center">暂无评估数据，请先在课堂模式或智能评估中完成评估。</div>;
+  }
 
   const weakProblems = analytics.filter(a => a.weak_dimensions.length > 0 || Object.values(a.avg_dimension_scores).some(v => v < 2.5));
   const problems = weakProblems.length > 0 ? weakProblems : analytics;

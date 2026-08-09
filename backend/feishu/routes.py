@@ -2,6 +2,8 @@
 
 Endpoints:
 - GET  /api/feishu/health              - config status (no secrets)
+- GET  /api/feishu/bitable/status      - Bitable config + binding counts
+- POST /api/feishu/bitable/sync        - manual one-way sync of a course
 - POST /api/feishu/minutes/import      - accept audio, upload + create minute (M2)
 - GET  /api/feishu/minutes/{token}/status - poll transcript, store raw_text (M2)
 - POST /api/feishu/events              - event subscription callback (M4)
@@ -15,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from database import DebateTopic, Student, StudentResponse, get_db
+from database import DebateTopic, FeishuBinding, Student, StudentResponse, get_db
 
 from .bot import BotService
 from .client import (
@@ -25,6 +27,12 @@ from .client import (
     FeishuConfigurationError,
 )
 from .minutes import MinutesService
+from .sync import (
+    BitableSyncer,
+    TABLE_KEYS,
+    bitable_is_configured,
+    bitable_status,
+)
 
 router = APIRouter(prefix="/api/feishu", tags=["feishu"])
 
@@ -59,8 +67,39 @@ async def health():
         "status": status["status"],
         "feishu": _feishu_config.summary(),
         "auth": status,
-        "bitable": "deferred",
+        "bitable": bitable_status(_feishu_config),
     }
+
+
+@router.get("/bitable/status")
+def bitable_status_endpoint(db: Session = Depends(get_db)):
+    """Bitable configuration and how many local entities are bound so far."""
+    result = bitable_status(_feishu_config)
+    counts = {}
+    for key in TABLE_KEYS:
+        counts[key] = (
+            db.query(FeishuBinding).filter(FeishuBinding.table_key == key).count()
+        )
+    result["bindings"] = counts
+    return result
+
+
+@router.post("/bitable/sync")
+async def bitable_sync(body: dict, db: Session = Depends(get_db)):
+    """Manually sync one course (course + topics + students + responses)."""
+    if not bitable_is_configured(_feishu_config):
+        raise HTTPException(
+            503,
+            "FEISHU_BITABLE_APP_TOKEN / FEISHU_BITABLE_TABLE_IDS not configured",
+        )
+    try:
+        course_id = int(body.get("course_id") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "course_id must be an integer")
+    if course_id <= 0:
+        raise HTTPException(400, "course_id is required")
+    syncer = BitableSyncer(get_client(), _feishu_config)
+    return await syncer.sync_course(db, course_id)
 
 
 @router.post("/minutes/import")

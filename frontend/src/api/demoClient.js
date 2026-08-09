@@ -7,12 +7,57 @@
  * so we must parse them here before returning to the frontend.
  */
 import demoData from '../demo-data.json';
-import { ratingToNumber } from '../utils/ratings';
+import { computePrepAnalytics, computeClassReport } from '../utils/analytics';
 
 const _clone = (v) => JSON.parse(JSON.stringify(v));
 const _pristine = demoData;
 let _data = _clone(demoData);
 const ok = (d) => Promise.resolve(d);
+
+// Persist the demo dataset to localStorage so multiple windows (student windows,
+// teacher reloads, a second workbench tab) share the SAME data. Reset clears it.
+const STORAGE_KEY = 'weixue-demo-data-v1';
+
+function _persist() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      data: _data, status: _status, dialogue: _dialogue, suggestion: _lastSuggestion,
+    }));
+  } catch { /* quota/security errors ignored */ }
+}
+
+function _hydrate() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (saved.data) _data = saved.data;
+    if (saved.status) Object.assign(_status, saved.status);
+    if (saved.dialogue) Object.assign(_dialogue, saved.dialogue);
+    if (saved.suggestion) Object.assign(_lastSuggestion, saved.suggestion);
+  } catch { /* corrupted storage ignored */ }
+}
+
+// Live-classroom simulation state (demo mode only).
+const _status = {};    // { [responseId]: 'not_started'|'recording'|'submitted'|'processing'|'processed' }
+const _dialogue = {};  // { [responseId]: [turn, ...] }
+const _lastSuggestion = {}; // { [responseId]: {questions, scaffold_status, echo_risk, note} }
+
+_hydrate();
+
+const MOCK_SCORES = {
+  clarity: 'A', relevance: 'A-', inference: 'B+', evidence_use: 'B+',
+};
+
+const DEMO_SUGGESTIONS = [
+  '你的理由和结论之间是不是缺了什么？要不要补充一下？',
+  '如果换一个角度想，这件事还会有什么不同的看法？',
+];
+
+const DEMO_SUGGESTIONS_ECHO = [
+  '可以换一种方式说说你的想法吗？比如如果你是这只狐狸，你会怎么做？',
+  '你的理由和结论之间是不是缺了什么？要不要补充一下？',
+];
 
 // Demo transcript used by the simulated audio import (matches the 动物园 topics).
 const DEMO_TRANSCRIPT =
@@ -31,6 +76,8 @@ function _parseResponse(r) {
   if (!r) return r;
   return {
     ...r,
+    processing_status: r.processing_status || _status[r.id] || 'not_started',
+    teacher_rating: r.teacher_rating || '',
     ai_dimension_scores: _jp(r.ai_dimension_scores),
     teacher_dimension_scores: _jp(r.teacher_dimension_scores),
     ai_reasoning: _jp(r.ai_reasoning),
@@ -67,6 +114,7 @@ export const createCourse = (data) => {
   const id = Math.max(0, ..._data.courses.map(c => c.id)) + 1;
   const c = { id, ...data, created_at: new Date().toISOString(), topic_count: 0, student_count: 0 };
   _data.courses.push(c);
+  _persist();
   return ok(c);
 };
 
@@ -84,16 +132,19 @@ export const createTopic = (cid, data) => {
     ...data,
   };
   _data.topics.push(t);
+  _persist();
   return ok(t);
 };
 export const updateTopic = (tid, data) => {
   const t = _data.topics.find(x => x.id === tid);
   if (t) Object.assign(t, data);
+  _persist();
   return ok(t);
 };
 export const deleteTopic = (tid) => {
   _data.topics = _data.topics.filter(x => x.id !== tid);
   _data.responses = _data.responses.filter(r => r.topic_id !== tid);
+  _persist();
   return ok({ ok: true, topic_id: tid });
 };
 
@@ -108,16 +159,19 @@ export const createStudentsBatch = (cid, students) => {
     _data.students.push(st);
     created.push(st);
   });
+  _persist();
   return ok({ created, skipped: [] });
 };
 export const updateStudent = (sid, data) => {
   const s = _data.students.find(x => x.id === sid);
   if (s) Object.assign(s, data);
+  _persist();
   return ok(s);
 };
 export const deleteStudent = (sid) => {
   _data.students = _data.students.filter(x => x.id !== sid);
   _data.responses = _data.responses.filter(r => r.student_id !== sid);
+  _persist();
   return ok({ ok: true, student_id: sid });
 };
 
@@ -139,6 +193,14 @@ export const deleteResponse = (rid) => {
   return ok({ ok: true, response_id: rid });
 };
 
+/** Register a response object received from another tab (live status bus). */
+export const registerResponse = (resp) => {
+  if (!resp || !resp.id) return;
+  const idx = _data.responses.findIndex(r => r.id === resp.id);
+  if (idx >= 0) _data.responses[idx] = resp;
+  else _data.responses.push(resp);
+};
+
 export const reviewResponse = (rid, data) => {
   const response = _data.responses.find(r => r.id === rid);
   if (!response) return Promise.reject(new Error('Response not found'));
@@ -147,36 +209,156 @@ export const reviewResponse = (rid, data) => {
   response.teacher_note = data.note || '';
   response.teacher_confidence_override = data.confidence_override || null;
   response.teacher_reviewed = true;
+  response.teacher_rating = data.rating || '';
+  response.processing_status = 'processed';
+  _status[rid] = 'processed';
+  _persist();
   return ok(_parseResponse(response));
 };
 
-export const importAudio = (cid, studentId, topicId, file) => {
+export const importAudio = (cid, studentId, topicId, file, source) => {
   const resp = _data.responses.find(
     r => r.student_id === studentId && r.topic_id === topicId
   );
   if (resp) {
     resp.raw_text = DEMO_TRANSCRIPT;
-    resp.source = 'audio';
+    resp.source = source || 'audio';
     resp.cleaned_text = '';
     resp.ai_dimension_scores = null;
     resp.ai_confidence = 'uncertain';
     resp.teacher_reviewed = false;
+    resp.teacher_rating = '';
+    resp.processing_status = 'submitted';
+    _status[resp.id] = 'submitted';
   }
+  _persist();
   return ok(_parseResponse(resp));
 };
-export const importText = (cid, studentId, topicId, text) => {
+export const importText = (cid, studentId, topicId, text, source) => {
   let resp = _data.responses.find(r => r.student_id === studentId && r.topic_id === topicId);
   if (!resp) {
     resp = { id: Math.max(0, ..._data.responses.map(r => r.id)) + 1, student_id: studentId, topic_id: topicId };
     _data.responses.push(resp);
   }
   resp.raw_text = text;
-  resp.source = 'manual';
+  resp.source = source || 'manual';
   resp.cleaned_text = '';
   resp.ai_dimension_scores = null;
   resp.ai_confidence = 'uncertain';
   resp.teacher_reviewed = false;
+  resp.teacher_rating = '';
+  resp.processing_status = 'submitted';
+  _status[resp.id] = 'submitted';
+  _persist();
   return ok(_parseResponse(resp));
+};
+
+// ── AI Companion (demo simulation) ─────────────────────
+export const updateResponseStatus = (rid, status) => {
+  const resp = _data.responses.find(r => r.id === rid);
+  if (!resp) return Promise.reject(new Error('Response not found'));
+  _status[rid] = status;
+  resp.processing_status = status;
+  _persist();
+  return ok(_parseResponse(resp));
+};
+
+export const getDialogue = (rid) => ok((_dialogue[rid] || []).map(t => ({ ...t })));
+
+export const appendTurn = (rid, data) => {
+  const resp = _data.responses.find(r => r.id === rid);
+  if (!resp) return Promise.reject(new Error('Response not found'));
+  const turn = {
+    id: Date.now(),
+    response_id: rid,
+    role: data.role,
+    content: data.content,
+    turn_type: data.turn_type || '',
+    created_at: new Date().toISOString(),
+  };
+  (_dialogue[rid] ||= []).push(turn);
+  if (data.role === 'student') {
+    const prev = resp.raw_text || '';
+    resp.raw_text = prev ? `${prev}\n${data.content}` : data.content;
+    resp.cleaned_text = '';
+    resp.ai_dimension_scores = null;
+    resp.ai_confidence = 'uncertain';
+    resp.ai_reasoning = {};
+    resp.ai_extracted_features = {};
+    resp.ai_note = '';
+    resp.ai_suggested_tags = [];
+    resp.teacher_reviewed = false;
+    resp.teacher_rating = '';
+    resp.processing_status = 'submitted';
+    _status[rid] = 'submitted';
+  }
+  _persist();
+  return ok(_parseResponse(resp));
+};
+
+export const suggestTurn = (rid) => {
+  const resp = _data.responses.find(r => r.id === rid);
+  const studentTurns = (_dialogue[rid] || []).filter(t => t.role === 'student');
+  const last = studentTurns[studentTurns.length - 1];
+  const text = (last?.content || resp?.raw_text || '').trim();
+  const echo = text.length <= 12 && ['是的', '对的', '对', '嗯', '好'].some(m => text.includes(m));
+  const suggestion = {
+    questions: echo ? DEMO_SUGGESTIONS_ECHO : DEMO_SUGGESTIONS,
+    scaffold_status: echo ? 'echo_risk' : 'continue',
+    echo_risk: echo,
+    note: echo
+      ? '学生疑似在复述问法，建议换一种更开放的方式再问。'
+      : '回答有了雏形，可以追问理由与结论之间的连接。',
+  };
+  _lastSuggestion[rid] = suggestion;
+  return ok(suggestion);
+};
+
+export const assessOne = (rid) => {
+  const resp = _data.responses.find(r => r.id === rid);
+  if (!resp) return Promise.reject(new Error('Response not found'));
+  _status[rid] = 'processing';
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const scores = resp.ai_dimension_scores || { ...MOCK_SCORES };
+      resp.ai_dimension_scores = scores;
+      resp.ai_confidence = 'certain_good';
+      resp.ai_reasoning = Object.fromEntries(
+        Object.entries(scores).map(([dim, rating]) => [dim, {
+          evidence: '学生原话', reasoning: '演示环境的模拟推理', rating,
+        }]),
+      );
+      resp.ai_suggested_tags = ['观点明确', '有理由'];
+      resp.cleaned_text = resp.raw_text || '';
+      resp.teacher_reviewed = false;
+      resp.teacher_rating = '';
+      resp.processing_status = 'processed';
+      _status[rid] = 'processed';
+      _persist();
+      resolve(_parseResponse(resp));
+    }, 1200);
+  });
+};
+
+// ── Parent report (interface reserved) ─────────────────
+export const getStudentReport = (sid) => {
+  const st = _data.students.find(s => s.id === sid);
+  const resps = _data.responses.filter(r => r.student_id === sid).map(_parseResponse);
+  const latest = resps[resps.length - 1] || null;
+  const scores = latest ? (latest.teacher_dimension_scores || latest.ai_dimension_scores || {}) : {};
+  const topic = latest ? _data.topics.find(t => t.id === latest.topic_id) : null;
+  return ok({
+    student_id: sid,
+    name: st?.name || '',
+    grade: st?.grade || 4,
+    has_report: !!latest,
+    topic_title: topic?.title || '',
+    dimensions: scores,
+    teacher_comment: latest?.teacher_note || '',
+    rating: latest?.teacher_rating || '',
+    reviewed: !!latest?.teacher_reviewed,
+    next_steps: ['下节课重点关注对应引导方向'],
+  });
 };
 
 // ── Assessment (no-op in demo) ──────────────────────────
@@ -192,6 +374,10 @@ export const getAssessmentProgress = (cid) =>
   });
 export const resetCourse = (cid) => {
   _data = _clone(_pristine);
+  Object.keys(_status).forEach(k => delete _status[k]);
+  Object.keys(_dialogue).forEach(k => delete _dialogue[k]);
+  Object.keys(_lastSuggestion).forEach(k => delete _lastSuggestion[k]);
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
   return ok({ ok: true });
 };
 
@@ -204,12 +390,14 @@ export const saveCommentDraft = (cid, studentId, draft) => {
   const student = _data.students.find(s => s.id === studentId && s.course_id === cid);
   if (!student) return Promise.reject(new Error('Student not found'));
   student.comment_draft = draft;
+  _persist();
   return ok({ ok: true, student_id: studentId });
 };
 export const sendComment = (cid, studentId, draft) => {
   const student = _data.students.find(s => s.id === studentId && s.course_id === cid);
   if (!student) return Promise.reject(new Error('Student not found'));
   student.comment_draft = draft;
+  _persist();
   return ok({
     ok: true,
     student_id: studentId,
@@ -230,146 +418,23 @@ export const batchGenerateComments = (cid) => ok({
 
 // ── Prep Analytics ──────────────────────────────────────
 export const getPrepAnalytics = (cid) => {
-  const topics = _data.topics.filter(topic => topic.course_id === cid).map(_parseTopic);
   const students = _data.students.filter(student => student.course_id === cid);
-  const studentNames = new Map(students.map(student => [student.id, student.name]));
-  const studentIds = new Set(studentNames.keys());
+  const topics = _data.topics.filter(topic => topic.course_id === cid).map(_parseTopic);
+  const studentIds = new Set(students.map(student => student.id));
   const responses = _data.responses
     .map(_parseResponse)
     .filter(response => studentIds.has(response.student_id));
-
-  const result = topics.map(topic => {
-    const dimensionValues = {};
-    const lowStudents = [];
-    const tagCounts = {};
-
-    responses.filter(response => response.topic_id === topic.id).forEach(response => {
-      const scores = response.teacher_dimension_scores || response.ai_dimension_scores;
-      const confidence = response.teacher_confidence_override || response.ai_confidence;
-      if (confidence === 'uncertain' && !response.teacher_dimension_scores) return;
-
-      const studentValues = [];
-      if (scores && typeof scores === 'object') {
-        Object.entries(scores).forEach(([dimension, rating]) => {
-          const value = ratingToNumber(rating);
-          if (value === null) return;
-          (dimensionValues[dimension] ||= []).push(value);
-          studentValues.push(value);
-        });
-      }
-      if (studentValues.length > 0) {
-        const average = studentValues.reduce((sum, value) => sum + value, 0) / studentValues.length;
-        if (average < 2.5) lowStudents.push(`${studentNames.get(response.student_id)}(${average.toFixed(1)})`);
-      }
-
-      const tags = response.teacher_tags || response.ai_suggested_tags || [];
-      tags.forEach(tag => { tagCounts[tag] = (tagCounts[tag] || 0) + 1; });
-    });
-
-    const avgDimensionScores = Object.fromEntries(
-      Object.entries(dimensionValues).map(([dimension, values]) => [
-        dimension,
-        Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 100) / 100,
-      ]),
-    );
-    return {
-      topic_id: topic.id,
-      title: topic.title,
-      topic_type: topic.topic_type,
-      cognitive_tier: topic.cognitive_tier,
-      avg_dimension_scores: avgDimensionScores,
-      weak_dimensions: Object.entries(avgDimensionScores)
-        .filter(([, average]) => average < 2.5)
-        .map(([dimension]) => dimension),
-      low_students: lowStudents,
-      error_tags: Object.entries(tagCounts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([tag, count]) => ({ tag, count })),
-    };
-  });
-
-  result.sort((a, b) => {
-    const aMin = Math.min(...Object.values(a.avg_dimension_scores), 5);
-    const bMin = Math.min(...Object.values(b.avg_dimension_scores), 5);
-    return aMin - bMin;
-  });
-  return ok(result);
+  return ok(computePrepAnalytics(students, topics, responses));
 };
 
 // ── Report ──────────────────────────────────────────────
 export const getClassReport = (cid) => {
   const students = _data.students.filter(student => student.course_id === cid);
-  const studentIds = new Set(students.map(student => student.id));
   const topics = _data.topics.filter(topic => topic.course_id === cid).map(_parseTopic);
+  const studentIds = new Set(students.map(student => student.id));
   const responses = _data.responses.map(_parseResponse).filter(response => studentIds.has(response.student_id));
-
-  const topicStats = topics.map(topic => {
-    const dimensionValues = {};
-    let uncertain = 0;
-    responses.filter(response => response.topic_id === topic.id).forEach(response => {
-      const scores = response.teacher_dimension_scores || response.ai_dimension_scores;
-      const confidence = response.teacher_confidence_override || response.ai_confidence;
-      if (confidence === 'uncertain' && !response.teacher_dimension_scores) {
-        uncertain += 1;
-        return;
-      }
-      if (!scores || typeof scores !== 'object') return;
-      Object.entries(scores).forEach(([dimension, rating]) => {
-        const value = ratingToNumber(rating);
-        if (value !== null) (dimensionValues[dimension] ||= []).push(value);
-      });
-    });
-    return {
-      topic_id: topic.id,
-      title: topic.title,
-      cognitive_tier: topic.cognitive_tier,
-      avg_dimension_scores: Object.fromEntries(
-        Object.entries(dimensionValues).map(([dimension, values]) => [
-          dimension,
-          Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 100) / 100,
-        ]),
-      ),
-      uncertain,
-    };
-  });
-
-  const studentStats = students.map(st => {
-    const vals = [];
-    let uncertain = 0;
-    responses.filter(r => r.student_id === st.id).forEach(r => {
-      const scores = r.teacher_dimension_scores || r.ai_dimension_scores;
-      const confidence = r.teacher_confidence_override || r.ai_confidence;
-      if (confidence === 'uncertain' && !r.teacher_dimension_scores) {
-        uncertain += 1;
-        return;
-      }
-      if (scores && typeof scores === 'object') {
-        Object.values(scores).forEach(rating => {
-          const value = ratingToNumber(rating);
-          if (value !== null) vals.push(value);
-        });
-      }
-    });
-    return {
-      student_id: st.id, name: st.name, grade: st.grade,
-      cognitive_tier: st.grade <= 2 ? 'basic' : st.grade <= 5 ? 'developing' : 'advancing',
-      avg_score: vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100 : 0,
-      uncertain,
-    };
-  });
-
-  const avgs = studentStats.map(s => s.avg_score).filter(a => a > 0);
-  return ok({
-    class_avg: avgs.length ? Math.round((avgs.reduce((a, b) => a + b, 0) / avgs.length) * 100) / 100 : 0,
-    student_count: students.length,
-    topic_stats: topicStats,
-    student_stats: studentStats,
-    top_tags: _data.tags
-      .filter(tag => tag.course_id === cid && tag.use_count > 0)
-      .sort((a, b) => b.use_count - a.use_count)
-      .slice(0, 10)
-      .map(tag => ({ name: tag.name, count: tag.use_count, source: tag.source })),
-  });
+  const tags = _data.tags.filter(tag => tag.course_id === cid).map(_parseTag);
+  return ok(computeClassReport(students, topics, responses, tags, cid));
 };
 
 // ── Tags ────────────────────────────────────────────────

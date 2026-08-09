@@ -8,6 +8,7 @@ negative indicators, and optional teacher calibration examples.
 from typing import Optional
 from sqlalchemy.orm import Session
 from database import RubricTemplate, CalibrationRecord, StudentResponse, Student, get_cognitive_tier
+from companion import build_dialogue_block
 
 
 class RubricLoader:
@@ -71,6 +72,17 @@ class RubricLoader:
         else:
             prompt = prompt.replace("{CALIBRATION_EXAMPLES}", "")
 
+        # Enterprise-alignment reminder (negative list + tier focus + tone)
+        prompt += (
+            "\n\n【企业评分口径提醒】\n"
+            "- 评估聚焦底层逻辑：观点是否清楚、有无具体事实/例子支撑、条理是否合理、"
+            "用词是否符合语境、是否多角度换位思考。\n"
+            "- 明确不评：流利度、表达漂亮与否、好词好句、引经据典。\n"
+            "- 低年级（1-3 年级）重点看\"敢说、说清楚\"（观点表达完整性）；"
+            "高年级重点看逻辑论证严谨度（理由充分、反驳有力）。\n"
+            "- 评语基调：肯定式、发现闪光点，避免应试式纠错口吻。\n"
+        )
+
         return prompt
 
     def build_user_prompt(
@@ -81,6 +93,7 @@ class RubricLoader:
         reference_arguments: list[str],
         student_text: str,
         student_grade: int,
+        dialogue_turns: list | None = None,
     ) -> str:
         """Build the user prompt for a specific student response.
 
@@ -107,6 +120,11 @@ class RubricLoader:
         if reference_arguments:
             args_str = "\n".join(f"  - {a}" for a in reference_arguments)
             parts.append(f"参考论据库：\n{args_str}")
+
+        if dialogue_turns:
+            block = build_dialogue_block(dialogue_turns)
+            if block:
+                parts.append(block)
 
         parts.append(f"\n学生作答：\n{student_text}")
         parts.append("\n请按上述系统指令中的评估维度逐一分析该学生的作答。")

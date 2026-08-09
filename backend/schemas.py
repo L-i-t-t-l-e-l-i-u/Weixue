@@ -125,6 +125,8 @@ class StudentResponseOut(BaseModel):
     teacher_tags: list = Field(default_factory=list)
     teacher_note: str = ""
     teacher_reviewed: bool = False
+    teacher_rating: str = ""
+    processing_status: str = "not_started"
 
     class Config:
         from_attributes = True
@@ -135,12 +137,48 @@ class TeacherReview(BaseModel):
     confidence_override: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
     note: str = ""
+    rating: Optional[str] = None
+
+
+# ── AI Companion (live-class dialogue) ───────────────────────
+
+class CompanionTurnCreate(BaseModel):
+    """Append a turn to the companion dialogue of a response."""
+    role: str                      # student / ai_suggestion / teacher
+    content: str
+    turn_type: str = ""            # scaffold / counter_example / elicitation / echo_risk / note
+
+
+class CompanionTurnOut(BaseModel):
+    id: int
+    response_id: int
+    role: str
+    content: str
+    turn_type: str = ""
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class StatusUpdate(BaseModel):
+    """Advance the live-class processing pipeline of a response."""
+    status: str                    # not_started / recording / submitted / processing / processed
+
+
+class SuggestTurnOut(BaseModel):
+    """AI scaffolding-question suggestion + echo detection result."""
+    questions: list[str] = Field(default_factory=list)
+    scaffold_status: str = "ok"    # ok / continue / echo_risk
+    echo_risk: bool = False
+    note: str = ""
 
 class TextImportRequest(BaseModel):
     """Manual transcript paste from the recording entry page."""
     student_id: int
     topic_id: int
     text: str
+    source: str = "manual"   # manual / student_device / teacher
 
 
 # ── RubricTemplate ──────────────────────────────────────────

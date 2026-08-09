@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import useStore from '../stores/gradingStore';
-import * as api from '../api/client';
+import { computeClassReport } from '../utils/analytics';
 
 const DIM_LABELS = {
   clarity: '清晰性', interpretation: '解释力', evidence_awareness: '证据意识',
@@ -25,20 +25,24 @@ const scoreLabel = (avg) => {
 };
 
 export default function ReportPage() {
-  const { courseId } = useStore();
-  const [report, setReport] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { courseId, students, topics, responses, tags } = useStore();
+  const report = useMemo(
+    () => computeClassReport(
+      students,
+      topics,
+      Object.values(responses).flat(),
+      tags,
+      courseId,
+    ),
+    [students, topics, responses, tags, courseId],
+  );
 
-  useEffect(() => {
-    if (!courseId) return;
-    api.getClassReport(courseId)
-      .then(setReport)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [courseId]);
-
-  if (loading) return <div className="text-slate-400 py-10 text-center">加载报告...</div>;
-  if (!report) return <div className="text-red-500 py-10 text-center">报告加载失败</div>;
+  if (!courseId) {
+    return <div className="text-slate-400 py-10 text-center">加载报告...</div>;
+  }
+  if (!report || report.student_count === 0) {
+    return <div className="text-red-500 py-10 text-center">报告加载失败：暂无班级数据</div>;
+  }
 
   const classLabel = scoreLabel(report.class_avg);
 

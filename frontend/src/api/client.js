@@ -41,23 +41,53 @@ export const reviewResponse = (...a) => _isDemo ? _demo.reviewResponse(...a) :
   api.post(`/responses/${a[0]}/review`, a[1]).then(r => r.data);
 
 // ── Audio import (ASR pipeline) ──────────────────────────
-export const importAudio = (courseId, studentId, topicId, file) => {
-  if (_isDemo) return _demo.importAudio(courseId, studentId, topicId, file);
+export const importAudio = (courseId, studentId, topicId, file, source) => {
+  if (_isDemo) return _demo.importAudio(courseId, studentId, topicId, file, source);
   const fd = new FormData();
   fd.append('student_id', studentId);
   fd.append('topic_id', topicId);
   fd.append('file', file);
+  fd.append('source', source || 'audio');
   return api.post(`/courses/${courseId}/audio/import`, fd).then(r => r.data);
 };
-export const importText = (courseId, studentId, topicId, text) => _isDemo
-  ? _demo.importText(courseId, studentId, topicId, text)
-  : api.post(`/courses/${courseId}/responses/text`, { student_id: studentId, topic_id: topicId, text }).then(r => r.data);
+export const importText = (courseId, studentId, topicId, text, source) => _isDemo
+  ? _demo.importText(courseId, studentId, topicId, text, source)
+  : api.post(`/courses/${courseId}/responses/text`, {
+      student_id: studentId, topic_id: topicId, text, source: source || 'manual',
+    }).then(r => r.data);
+
+// ── AI Companion (live classroom) ──────────────────────
+export const suggestTurn = (rid) => _isDemo
+  ? _demo.suggestTurn(rid)
+  : api.post(`/companion/${rid}/suggest-turn`).then(r => r.data);
+export const appendTurn = (rid, data) => _isDemo
+  ? _demo.appendTurn(rid, data)
+  : api.post(`/responses/${rid}/turns`, data).then(r => r.data);
+export const getDialogue = (rid) => _isDemo
+  ? _demo.getDialogue(rid)
+  : api.get(`/companion/${rid}`).then(r => r.data);
+export const updateResponseStatus = (rid, status) => _isDemo
+  ? _demo.updateResponseStatus(rid, status)
+  : api.patch(`/responses/${rid}/status`, { status }).then(r => r.data);
+export const assessOne = (rid) => _isDemo
+  ? _demo.assessOne(rid)
+  : api.post(`/responses/${rid}/assess`).then(r => r.data);
+
+// ── Parent report (interface reserved) ─────────────────
+export const getStudentReport = (sid) => _isDemo
+  ? _demo.getStudentReport(sid)
+  : api.get(`/students/${sid}/report`).then(r => r.data);
 
 // ── Assessment ──────────────────────────────────────────
 export const assessCourse = (...a) => _isDemo ? _demo.assessCourse(...a) : api.post(`/courses/${a[0]}/assess`).then(r => r.data);
 export const getAssessmentProgress = (...a) => _isDemo ? _demo.getAssessmentProgress(...a) :
   api.get(`/courses/${a[0]}/assessment-progress`).then(r => r.data);
 export const resetCourse = (...a) => _isDemo ? _demo.resetCourse(...a) : api.post(`/courses/${a[0]}/reset`).then(r => r.data);
+
+/** Register a response object synced from another tab (demo mode only). */
+export const registerDemoResponse = (resp) => {
+  if (_isDemo) _demo.registerResponse(resp);
+};
 
 // ── Comments ────────────────────────────────────────────
 export const generateComment = (...a) => _isDemo ? _demo.generateComment(...a) :

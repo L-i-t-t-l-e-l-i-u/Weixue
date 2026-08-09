@@ -140,11 +140,42 @@ class StudentResponse(Base):
     teacher_tags = Column(JSON, default=list)
     teacher_note = Column(Text, default="")
     teacher_reviewed = Column(Boolean, default=False)
+    teacher_rating = Column(String(20), default="")
+
+    # Live-class companion pipeline status (student window drives the first
+    # states; backend advances through processing/processed).
+    processing_status = Column(String(20), default="not_started")
+    # not_started / recording / submitted / processing / processed
 
     student = relationship("Student", back_populates="responses")
     topic = relationship("DebateTopic", back_populates="responses")
     calibrations = relationship("CalibrationRecord", back_populates="response",
                                 cascade="all, delete-orphan")
+    companion_turns = relationship("CompanionTurn", back_populates="response",
+                                   cascade="all, delete-orphan",
+                                   order_by="CompanionTurn.created_at")
+
+
+class CompanionTurn(Base):
+    """One turn of the AI-companion dialogue bound to a StudentResponse.
+
+    role: student (oral answer) / ai_suggestion (scaffolding question
+          suggested to the teacher) / teacher (question actually asked).
+    turn_type: scaffold / counter_example / elicitation / echo_risk / note.
+    The full dialogue history is injected into the evaluator prompt so the
+    assessment can account for AI/teacher scaffolding and echo detection.
+    """
+
+    __tablename__ = "companion_turns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    response_id = Column(Integer, ForeignKey("student_responses.id"), nullable=False)
+    role = Column(String(20), nullable=False)
+    content = Column(Text, default="")
+    turn_type = Column(String(30), default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    response = relationship("StudentResponse", back_populates="companion_turns")
 
 
 class RubricTemplate(Base):
@@ -238,6 +269,27 @@ class AudioRecording(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class FeishuBinding(Base):
+    """Maps a local entity to a Feishu Bitable record (one-way sync).
+
+    Kept on the local side so that subsequent syncs can batch_update the
+    same remote row instead of creating duplicates. entity_type is one of
+    course / topic / student / response; table_key matches the Bitable
+    table names used in FEISHU_BITABLE_TABLE_IDS.
+    """
+
+    __tablename__ = "feishu_bindings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entity_type = Column(String(30), nullable=False)
+    entity_id = Column(Integer, nullable=False)
+    table_key = Column(String(30), nullable=False)
+    remote_record_id = Column(String(120), nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
 # ── Helpers ─────────────────────────────────────────────────
 
 def get_db():
@@ -273,4 +325,8 @@ def _migrate():
             conn.execute(text("ALTER TABLE student_responses ADD COLUMN segment_start_ms INTEGER"))
         if "segment_end_ms" not in cols:
             conn.execute(text("ALTER TABLE student_responses ADD COLUMN segment_end_ms INTEGER"))
+        if "processing_status" not in cols:
+            conn.execute(text("ALTER TABLE student_responses ADD COLUMN processing_status VARCHAR(20) DEFAULT 'not_started'"))
+        if "teacher_rating" not in cols:
+            conn.execute(text("ALTER TABLE student_responses ADD COLUMN teacher_rating VARCHAR(20) DEFAULT ''"))
         conn.commit()

@@ -14,7 +14,7 @@ import threading
 from database import (
     get_db, init_db, SessionLocal,
     Course, DebateTopic, Student, StudentResponse,
-    RubricTemplate, CalibrationRecord, DimensionTag, AudioRecording,
+    RubricTemplate, CalibrationRecord, DimensionTag, AudioRecording, CompanionTurn,
     get_cognitive_tier,
 )
 from schemas import (
@@ -25,15 +25,18 @@ from schemas import (
     BatchCommentOut,
     TopicAnalytics, TagOut, TagUpdate, TagMerge,
     RubricTemplateOut,
+    CompanionTurnCreate, CompanionTurnOut, StatusUpdate, SuggestTurnOut,
 )
 from grading.evaluator import AssessmentEngine
 from grading.llm import LLMClient
 from grading.rubric_loader import RubricLoader
+from companion import CompanionEngine
 from feishu.routes import close_client as close_feishu_router_client
 from feishu.routes import router as feishu_router
 from asr import ASRClient, ASRError
 from grading.ratings import rating_to_value
 from feishu import FeishuAPIError, FeishuClient, FeishuConfigurationError
+from feishu.sync import BitableSyncer, bitable_status
 
 app = FastAPI(title="思辨星 · 少儿思辨能力认知自适应评估系统", version="0.1.0")
 
@@ -47,6 +50,7 @@ app.add_middleware(
 
 llm = LLMClient()
 evaluator = AssessmentEngine(llm)
+companion = CompanionEngine(llm)
 feishu_client = FeishuClient.from_env()
 
 app.include_router(feishu_router)
@@ -81,7 +85,7 @@ async def health_check():
         "status": "ok" if feishu["status"] in {"auth_ok", "ready"} else "degraded",
         "database": "ready",
         "feishu": feishu,
-        "bitable": "deferred",
+        "bitable": bitable_status(feishu_client.config),
     }
 
 
@@ -435,6 +439,13 @@ async def _run_assessment(cid: int, students, topics):
     finally:
         with _progress_lock:
             _assessment_progress[cid]["active"] = False
+        try:
+            syncer = BitableSyncer(feishu_client)
+            if syncer.available:
+                await syncer.sync_course(db, cid)
+        except Exception:
+            # Bitable sync must never break the assessment background task.
+            pass
         db.close()
 
 
@@ -469,6 +480,13 @@ def reset_course(cid: int, db: Session = Depends(get_db)):
         resp.teacher_tags = []
         resp.teacher_note = ""
         resp.teacher_reviewed = False
+        resp.teacher_rating = ""
+        resp.processing_status = "not_started"
+
+    # Reset companion dialogue turns for the course
+    db.query(CompanionTurn).join(StudentResponse).join(Student).filter(
+        Student.course_id == cid
+    ).delete(synchronize_session=False)
 
     # Reset tags: remove AI-new and teacher-created tags, reset base use_count
     db.query(DimensionTag).filter(
@@ -508,7 +526,12 @@ def _sync_tags_to_library(db, course_id, tag_names, source="teacher"):
 
 
 @app.post("/api/responses/{rid}/review", response_model=StudentResponseOut)
-def review_response(rid: int, body: TeacherReview, db: Session = Depends(get_db)):
+def review_response(
+    rid: int,
+    body: TeacherReview,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """Teacher reviews/overrides AI assessment on specific dimensions."""
     resp = db.query(StudentResponse).get(rid)
     if not resp:
@@ -558,12 +581,173 @@ def review_response(rid: int, body: TeacherReview, db: Session = Depends(get_db)
     resp.teacher_tags = body.tags
     resp.teacher_note = body.note
     resp.teacher_reviewed = True
+    resp.teacher_rating = body.rating or ""
+    resp.processing_status = "processed"
 
     # Tags newly selected by teacher → find-or-create + increment use_count
     _sync_tags_to_library(db, course_id, list(new_tags - old_tags), source="teacher")
 
     db.commit()
     db.refresh(resp)
+    background_tasks.add_task(_sync_response_after_review, rid)
+    return resp
+
+
+async def _sync_response_after_review(response_id: int):
+    """Fire-and-forget Bitable sync after a teacher confirms a review."""
+    db = SessionLocal()
+    try:
+        syncer = BitableSyncer(feishu_client)
+        if syncer.available:
+            await syncer.sync_response(db, response_id)
+    except Exception:
+        # Sync failures are reported via /api/feishu/bitable/status only.
+        pass
+    finally:
+        db.close()
+
+
+# ════════════════════════════════════════════════════════════
+# AI Companion (live-classroom dialogue + status pipeline)
+# ════════════════════════════════════════════════════════════
+
+@app.get("/api/companion/{rid}", response_model=list[CompanionTurnOut])
+def get_companion_turns(rid: int, db: Session = Depends(get_db)):
+    """Return the full dialogue history of a response (teacher/student both read it)."""
+    resp = db.query(StudentResponse).get(rid)
+    if not resp:
+        raise HTTPException(404, "Response not found")
+    return resp.companion_turns
+
+
+@app.post("/api/responses/{rid}/turns", response_model=StudentResponseOut)
+def append_companion_turn(rid: int, body: CompanionTurnCreate, db: Session = Depends(get_db)):
+    """Append a turn (student answer / adopted AI suggestion / teacher question)."""
+    resp = db.query(StudentResponse).get(rid)
+    if not resp:
+        raise HTTPException(404, "Response not found")
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(400, "content cannot be empty")
+
+    turn = CompanionTurn(
+        response_id=rid,
+        role=body.role,
+        content=content,
+        turn_type=body.turn_type or "",
+    )
+    db.add(turn)
+
+    if body.role == "student":
+        # A new oral round extends the raw answer and invalidates stale assessment.
+        prev = (resp.raw_text or "").strip()
+        resp.raw_text = (prev + "\n" + content).strip() if prev else content
+        resp.cleaned_text = ""
+        resp.ai_dimension_scores = None
+        resp.ai_confidence = "uncertain"
+        resp.ai_reasoning = {}
+        resp.ai_extracted_features = {}
+        resp.ai_note = ""
+        resp.ai_suggested_tags = []
+        resp.teacher_dimension_scores = None
+        resp.teacher_confidence_override = None
+        resp.teacher_tags = []
+        resp.teacher_note = ""
+        resp.teacher_reviewed = False
+        resp.teacher_rating = ""
+        resp.processing_status = "submitted"
+
+    db.commit()
+    db.refresh(resp)
+    return resp
+
+
+@app.post("/api/companion/{rid}/suggest-turn", response_model=SuggestTurnOut)
+async def suggest_companion_turn(rid: int, db: Session = Depends(get_db)):
+    """AI scaffolding-question suggestions + echo detection for one response."""
+    resp = db.query(StudentResponse).get(rid)
+    if not resp:
+        raise HTTPException(404, "Response not found")
+    if not (resp.raw_text or "").strip():
+        raise HTTPException(400, "response has no text yet")
+
+    topic = resp.topic
+    result = await companion.suggest_turn(
+        response_text=resp.raw_text or "",
+        turns=resp.companion_turns,
+        topic_title=topic.title if topic else "",
+        stimulus_material=topic.stimulus_material or "" if topic else "",
+        student_grade=resp.student.grade if resp.student else 4,
+    )
+    return SuggestTurnOut(**result)
+
+
+@app.patch("/api/responses/{rid}/status", response_model=StudentResponseOut)
+def update_response_status(rid: int, body: StatusUpdate, db: Session = Depends(get_db)):
+    """Advance the live-class status pipeline (adapter hook for student windows)."""
+    resp = db.query(StudentResponse).get(rid)
+    if not resp:
+        raise HTTPException(404, "Response not found")
+    allowed = {"not_started", "recording", "submitted", "processing", "processed"}
+    if body.status not in allowed:
+        raise HTTPException(400, f"invalid status: {body.status}")
+    resp.processing_status = body.status
+    db.commit()
+    db.refresh(resp)
+    return resp
+
+
+@app.post("/api/responses/{rid}/assess", response_model=StudentResponseOut)
+async def assess_one_response(rid: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Live path: evaluate a single response (cleaning + evaluation in one call)."""
+    resp = db.query(StudentResponse).get(rid)
+    if not resp:
+        raise HTTPException(404, "Response not found")
+    raw_text = (resp.raw_text or "").strip()
+    if not raw_text:
+        raise HTTPException(400, "response has no text")
+
+    resp.processing_status = "processing"
+    db.commit()
+
+    try:
+        loader = RubricLoader(db)
+        cal_records = loader.get_calibration_records(teacher_id="default", limit=10)
+        student = resp.student
+        topic = resp.topic
+        result = await evaluator.assess_combined(
+            rubric_loader=loader,
+            cognitive_tier=student.cognitive_tier,
+            topic_title=topic.title,
+            topic_type=topic.topic_type,
+            stimulus_material=topic.stimulus_material or "",
+            reference_arguments=topic.reference_arguments or [],
+            raw_text=raw_text,
+            student_grade=student.grade,
+            calibration_records=cal_records if cal_records else None,
+            dialogue_turns=resp.companion_turns or None,
+        )
+
+        resp.cleaned_text = result.get("cleaned_text", "")
+        resp.ai_dimension_scores = result.get("dimension_scores")
+        resp.ai_confidence = result.get("confidence", "uncertain")
+        resp.ai_reasoning = result.get("reasoning", {})
+        resp.ai_extracted_features = result.get("extracted_features", {})
+        resp.ai_note = result.get("note", "")
+        resp.ai_suggested_tags = result.get("suggested_tags", [])
+        new_tags = result.get("suggested_tags", [])
+        if new_tags:
+            _sync_tags_to_library(db, topic.course_id, new_tags, source="ai")
+        resp.processing_status = "processed"
+        db.commit()
+    except Exception as e:
+        resp.ai_confidence = "uncertain"
+        resp.ai_note = f"AI评估异常：{e}"
+        resp.processing_status = "processed"
+        db.commit()
+
+    db.refresh(resp)
+    background_tasks.add_task(_sync_response_after_review, rid)
     return resp
 
 
@@ -577,6 +761,7 @@ async def import_audio(
     student_id: int = Form(...),
     topic_id: int = Form(...),
     file: UploadFile = File(...),
+    source: str = Form("audio"),
     db: Session = Depends(get_db),
 ):
     """Upload classroom audio, transcribe via ASR (mock / dashscope / openai),
@@ -585,6 +770,8 @@ async def import_audio(
     topic = db.query(DebateTopic).get(topic_id)
     if not student or student.course_id != cid or not topic or topic.course_id != cid:
         raise HTTPException(400, "student/topic not found in course")
+    if source not in {"audio", "student_device", "teacher"}:
+        raise HTTPException(400, f"invalid source: {source}")
 
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_AUDIO_EXT:
@@ -611,22 +798,25 @@ async def import_audio(
     )
     if resp is None:
         resp = StudentResponse(
-            student_id=student_id, topic_id=topic_id, raw_text="", source="audio"
+            student_id=student_id, topic_id=topic_id, raw_text="", source=source
         )
         db.add(resp)
     resp.audio_recording_id = recording.id
+    resp.processing_status = "processing"
+    db.commit()
 
     try:
         transcript = await asr_client.transcribe(dest)
     except ASRError as exc:
-        resp.source = "audio"
+        resp.source = source
+        resp.processing_status = "submitted"
         db.commit()
         raise HTTPException(502, f"转写失败：{exc}")
 
     # A new transcript invalidates the previous assessment
     resp.raw_text = transcript
     resp.cleaned_text = ""
-    resp.source = "audio"
+    resp.source = source
     resp.ai_dimension_scores = None
     resp.ai_confidence = "uncertain"
     resp.ai_reasoning = {}
@@ -638,6 +828,8 @@ async def import_audio(
     resp.teacher_tags = []
     resp.teacher_note = ""
     resp.teacher_reviewed = False
+    resp.teacher_rating = ""
+    resp.processing_status = "submitted"
     db.commit()
     db.refresh(resp)
     return resp
@@ -669,14 +861,14 @@ async def import_text(
     if resp is None:
         resp = StudentResponse(
             student_id=body.student_id, topic_id=body.topic_id,
-            raw_text=text, source="manual",
+            raw_text=text, source=body.source or "manual",
         )
         db.add(resp)
 
     # New content invalidates the previous assessment
     resp.raw_text = text
     resp.cleaned_text = ""
-    resp.source = "manual"
+    resp.source = body.source or "manual"
     resp.ai_dimension_scores = None
     resp.ai_confidence = "uncertain"
     resp.ai_reasoning = {}
@@ -688,6 +880,8 @@ async def import_text(
     resp.teacher_tags = []
     resp.teacher_note = ""
     resp.teacher_reviewed = False
+    resp.teacher_rating = ""
+    resp.processing_status = "submitted"
     db.commit()
     db.refresh(resp)
     return resp
@@ -1263,6 +1457,66 @@ def class_report(cid: int, db: Session = Depends(get_db)):
         "topic_stats": topic_stats,
         "student_stats": student_stats,
         "top_tags": top_tags,
+    }
+
+
+@app.get("/api/students/{sid}/report")
+def student_report(sid: int, db: Session = Depends(get_db)):
+    """Parent-facing report endpoint (interface reserved; no frontend yet).
+
+    Returns a structured per-student report using the enterprise five-dimension
+    language so a future parent page / Feishu bot can consume it directly.
+    """
+    student = db.query(Student).get(sid)
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    response = (
+        db.query(StudentResponse)
+        .filter(StudentResponse.student_id == sid)
+        .order_by(StudentResponse.id.desc())
+        .first()
+    )
+    if not response:
+        return {
+            "student_id": sid,
+            "name": student.name,
+            "grade": student.grade,
+            "has_report": False,
+            "dimensions": {},
+            "teacher_comment": "",
+            "rating": "",
+            "next_steps": [],
+        }
+
+    scores = response.teacher_dimension_scores or response.ai_dimension_scores or {}
+    dim_labels = {
+        "clarity": "立意（观点鲜明）",
+        "interpretation": "立意（观点鲜明）",
+        "evidence_awareness": "选材（言之有物）",
+        "evidence_use": "选材（言之有物）",
+        "relevance": "结构（条理清晰）",
+        "inference": "结构（条理清晰）",
+        "argument_evaluation": "结构（条理清晰）",
+        "depth_breadth": "视角（换位思考）",
+        "self_regulation": "视角（换位思考）",
+    }
+    dimensions = {}
+    for dim, rating in scores.items():
+        label = dim_labels.get(dim, dim)
+        dimensions[label] = rating
+
+    return {
+        "student_id": sid,
+        "name": student.name,
+        "grade": student.grade,
+        "has_report": True,
+        "topic_title": response.topic.title if response.topic else "",
+        "dimensions": dimensions,
+        "teacher_comment": response.teacher_note or "",
+        "rating": response.teacher_rating or "",
+        "reviewed": response.teacher_reviewed,
+        "next_steps": ["下节课重点关注" + (response.teacher_rating or "本次表达") + "对应的引导方向"],
     }
 
 

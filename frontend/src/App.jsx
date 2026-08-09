@@ -6,6 +6,7 @@ import CommentsPage from './pages/CommentsPage';
 import PrepPage from './pages/PrepPage';
 import ReportPage from './pages/ReportPage';
 import LibraryPage from './pages/LibraryPage';
+import LiveCockpit from './pages/LiveCockpit';
 
 const TABS = [
   { key: 'manage',   label: '管理',     icon: '🗂️' },
@@ -27,7 +28,7 @@ const TAB_DESC = {
 const TIER_LABEL = { basic: '低年级', developing: '中年级', advancing: '高年级' };
 
 export default function App() {
-  const { course, courses, currentTab, setTab, loading, assessing, assessmentProgress, loadAllCourses, selectCourse, createCourse, runAssessment, resetAll } = useStore();
+  const { course, courses, currentTab, setTab, currentMode, setMode, loading, assessing, assessmentProgress, loadAllCourses, selectCourse, createCourse, runAssessment, resetAll } = useStore();
 
   useEffect(() => { loadAllCourses(); }, []);
 
@@ -92,8 +93,24 @@ export default function App() {
 
       {/* ── Tabs ───────────────────────────────────────── */}
       <nav className="bg-white border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-6 flex gap-1">
-          {TABS.map(t => (
+        <div className="max-w-7xl mx-auto px-6 flex gap-1 items-center">
+          <div className="flex bg-slate-100 rounded-lg p-0.5 mr-2">
+            <button
+              onClick={() => setMode('live')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer
+                ${currentMode === 'live' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
+            >
+              🏫 课堂
+            </button>
+            <button
+              onClick={() => setMode('workbench')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer
+                ${currentMode === 'workbench' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
+            >
+              🗂️ 工作台
+            </button>
+          </div>
+          {currentMode === 'workbench' && TABS.map(t => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
@@ -106,7 +123,7 @@ export default function App() {
             </button>
           ))}
           <div className="flex-1" />
-          {currentTab === 'grading' && !assessing && (
+          {currentMode === 'workbench' && currentTab === 'grading' && !assessing && (
             <div className="flex gap-2 my-1.5">
               <button
                 onClick={() => { if (window.confirm('确定要重置所有评估数据吗？所有评分、批注、标签将恢复到初始状态。')) resetAll(); }}
@@ -163,20 +180,28 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Description ────────────────────────────────── */}
-      <div className="max-w-7xl mx-auto px-6 pt-4 pb-2 text-sm text-slate-500">
-        {TAB_DESC[currentTab]}
-      </div>
+      {currentMode === 'live' ? (
+        <main className="max-w-7xl mx-auto px-6 pt-4 pb-10">
+          <LiveCockpit />
+        </main>
+      ) : (
+        <>
+          {/* ── Description ──────────────────────────────── */}
+          <div className="max-w-7xl mx-auto px-6 pt-4 pb-2 text-sm text-slate-500">
+            {TAB_DESC[currentTab]}
+          </div>
 
-      {/* ── Content ────────────────────────────────────── */}
-      <main className="max-w-7xl mx-auto px-6 pb-10">
-        {currentTab === 'manage'   && <ManagementPage />}
-        {currentTab === 'grading'  && <GradingPage />}
-        {currentTab === 'comments' && <CommentsPage />}
-        {currentTab === 'prep'     && <PrepPage />}
-        {currentTab === 'report'   && <ReportPage />}
-        {currentTab === 'library'  && <LibraryPage />}
-      </main>
+          {/* ── Content ──────────────────────────────────── */}
+          <main className="max-w-7xl mx-auto px-6 pb-10">
+            {currentTab === 'manage'   && <ManagementPage />}
+            {currentTab === 'grading'  && <GradingPage />}
+            {currentTab === 'comments' && <CommentsPage />}
+            {currentTab === 'prep'     && <PrepPage />}
+            {currentTab === 'report'   && <ReportPage />}
+            {currentTab === 'library'  && <LibraryPage />}
+          </main>
+        </>
+      )}
     </div>
   );
 }

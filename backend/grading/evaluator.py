@@ -8,6 +8,7 @@ Two-stage pipeline:
 from typing import Optional
 from .llm import LLMClient
 from .rubric_loader import RubricLoader
+from companion import build_dialogue_block
 
 CLEANING_SYSTEM_PROMPT = (
     '你是一位专业的文本编辑，负责将低年级学生的口语化发言转化为规范化的语义稿。\n\n'
@@ -59,6 +60,7 @@ class AssessmentEngine:
         student_text: str,
         student_grade: int,
         calibration_records: list | None = None,
+        dialogue_turns: list | None = None,
     ) -> dict:
         """Stage 2: Multi-dimensional rubric evaluation."""
         system_prompt = rubric_loader.build_system_prompt(
@@ -71,6 +73,7 @@ class AssessmentEngine:
             reference_arguments=reference_arguments,
             student_text=student_text,
             student_grade=student_grade,
+            dialogue_turns=dialogue_turns,
         )
 
         messages = [
@@ -106,6 +109,7 @@ class AssessmentEngine:
         raw_text: str,
         student_grade: int,
         calibration_records: list | None = None,
+        dialogue_turns: list | None = None,
     ) -> dict:
         """Full two-stage assessment: clean then evaluate.
 
@@ -127,10 +131,75 @@ class AssessmentEngine:
             student_text=cleaned_text,
             student_grade=student_grade,
             calibration_records=calibration_records,
+            dialogue_turns=dialogue_turns,
         )
 
         result['cleaned_text'] = cleaned_text
         return result
+
+    async def assess_combined(
+        self,
+        rubric_loader: RubricLoader,
+        cognitive_tier: str,
+        topic_title: str,
+        topic_type: str,
+        stimulus_material: str,
+        reference_arguments: list[str],
+        raw_text: str,
+        student_grade: int,
+        calibration_records: list | None = None,
+        dialogue_turns: list | None = None,
+    ) -> dict:
+        """Fast live-class path: cleaning + evaluation in a single LLM call.
+
+        Returns the same shape as assess() (cleaned_text + dimension_scores +
+        reasoning + features + note + suggested_tags). If the model omits
+        cleaned_text, fall back to the standalone cleaning stage.
+        """
+        system_prompt = rubric_loader.build_system_prompt(
+            cognitive_tier, calibration_records
+        )
+        user_prompt = rubric_loader.build_user_prompt(
+            topic_title=topic_title,
+            topic_type=topic_type,
+            stimulus_material=stimulus_material,
+            reference_arguments=reference_arguments,
+            student_text=raw_text,
+            student_grade=student_grade,
+            dialogue_turns=dialogue_turns,
+        )
+        user_prompt += (
+            "\n\n【合并模式要求】请先对上面的学生作答做语义无损清洗"
+            "（去掉口语填充词、修正明显错别字、规范标点，不改变观点和论证结构），"
+            "然后在返回的 JSON 中额外包含 \"cleaned_text\" 字段（清洗后的文本），"
+            "其余字段严格按上述格式返回。"
+        )
+        messages = [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt},
+        ]
+        try:
+            result = await self.llm.chat_json(
+                messages=messages,
+                temperature=0.2,
+                max_tokens=4000,
+            )
+            normalized = self._normalize(result)
+            cleaned = result.get("cleaned_text") or ""
+            if not cleaned.strip():
+                cleaned = await self.clean(raw_text)
+            normalized["cleaned_text"] = cleaned
+            return normalized
+        except Exception as e:
+            return {
+                'cleaned_text': raw_text,
+                'dimension_scores': None,
+                'confidence': 'uncertain',
+                'reasoning': {},
+                'extracted_features': {},
+                'note': f'AI评估失败（{e}），请教师手动审阅。',
+                'suggested_tags': [],
+            }
 
     @staticmethod
     def _normalize(raw: dict) -> dict:
