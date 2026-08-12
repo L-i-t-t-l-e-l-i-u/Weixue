@@ -68,6 +68,15 @@ TABLE_RESPONSES = {
     "更新时间": FIELD_DATE,
 }
 
+TABLE_PREP_PLANS = {
+    "班级": FIELD_TEXT,
+    "计划状态": FIELD_SINGLE_SELECT,
+    "讲评顺序": FIELD_TEXT,
+    "备注": FIELD_TEXT,
+    "AI总结": FIELD_TEXT,
+    "更新时间": FIELD_DATE,
+}
+
 # Single-select options that must exist for the sync builders to succeed.
 # Keyed by field name; merged across all tables that use the field.
 SINGLE_SELECT_OPTIONS: dict[str, list[str]] = {
@@ -77,6 +86,7 @@ SINGLE_SELECT_OPTIONS: dict[str, list[str]] = {
     "AI置信度": ["高", "低", "不确定"],
     "加分项": ["有自己", "有新意"],
     "状态": ["待评估", "AI已评", "教师已审"],
+    "计划状态": ["草稿", "已确认"],
 }
 
 

@@ -47,6 +47,7 @@ const useStore = create((set, get) => ({
   liveAiQuestions: {},          // { [responseId]: AI 自动追问的问题 }
   liveFinished: {},             // { [responseId]: 'student' | 'teacher' 谁结束了对话 }
   liveEchoRisk: {},             // { [responseId]: true 最近一轮有复述风险 }
+  liveTurnPhase: {},            // { [responseId]: awaiting_teacher | awaiting_student | ai_processing | done }
   liveMode: _readLiveMode(),    // 'auto' 学生端直接追问 / 'confirm' 教师端确认后发送
   livePaused: _readLivePaused(),// 全局暂停 AI 伴学
   livePendingSuggestions: {},   // { [responseId]: {questions, echoRisk, note} } 确认模式待发送
@@ -112,6 +113,29 @@ const useStore = create((set, get) => ({
     if (cid === get().courseId) return;
     set({ courseId: cid, currentStudentIdx: 0 });
     await get().loadCourse(cid);
+  },
+
+  // 演示/真实模式切换：两套数据完全独立，先清空当前会话状态再重新加载。
+  resetForModeSwitch: async () => {
+    set({
+      courseId: null,
+      currentStudentIdx: 0,
+      responses: {},
+      tags: [],
+      assessing: false,
+      assessmentProgress: null,
+      liveStatus: {},
+      liveDialogue: {},
+      liveSuggestions: {},
+      liveRounds: {},
+      liveAdopted: {},
+      liveTranscripts: {},
+      liveAiQuestions: {},
+      liveFinished: {},
+      livePendingSuggestions: {},
+      liveTurnPhase: {},
+    });
+    await get().loadAllCourses();
   },
 
   createCourse: async (data) => {
@@ -198,6 +222,34 @@ const useStore = create((set, get) => ({
     }
   },
 
+  // 课堂调试：清除全班所有学生发言（作答/对话/评估/录音都删，保留学生与辩题）。
+  clearLiveSpeech: async () => {
+    const cid = get().courseId;
+    if (!cid) return;
+    await api.clearCourseResponses(cid);
+    // 备课辅助的讲评计划也清掉（含本机 localStorage 兜底，避免旧计划复活）。
+    try {
+      localStorage.removeItem(`weixue-prep-plan-${cid}`);
+    } catch { /* ignore */ }
+    set({
+      responses: {},
+      assessing: false,
+      assessmentProgress: null,
+      liveStatus: {},
+      liveDialogue: {},
+      liveSuggestions: {},
+      liveRounds: {},
+      liveAdopted: {},
+      liveTranscripts: {},
+      liveAiQuestions: {},
+      liveFinished: {},
+      liveEchoRisk: {},
+      liveTurnPhase: {},
+      livePendingSuggestions: {},
+    });
+    await get().loadCourse(cid);
+  },
+
   // ── Live classroom mode ─────────────────────────────────
   setMode: (mode) => set({ currentMode: mode }),
   setLiveTopic: (topicId) => set({ liveTopicId: topicId }),
@@ -263,12 +315,14 @@ const useStore = create((set, get) => ({
       }
       if (evt.type === 'teacher_question') {
         set(state => ({ liveAdopted: { ...state.liveAdopted, [evt.responseId]: evt.question || '' } }));
+        set(state => ({ liveTurnPhase: { ...state.liveTurnPhase, [evt.responseId]: 'awaiting_student' } }));
         return;
       }
       if (evt.type === 'ai_question') {
         set(state => ({
           liveAiQuestions: { ...state.liveAiQuestions, [evt.responseId]: evt.question || '' },
           liveEchoRisk: { ...state.liveEchoRisk, [evt.responseId]: !!evt.echoRisk },
+          liveTurnPhase: { ...state.liveTurnPhase, [evt.responseId]: 'awaiting_student' },
         }));
         return;
       }
@@ -278,6 +332,7 @@ const useStore = create((set, get) => ({
             ...state.liveFinished,
             [evt.responseId]: evt.type === 'teacher_finished' ? 'teacher' : 'student',
           },
+          liveTurnPhase: { ...state.liveTurnPhase, [evt.responseId]: 'awaiting_teacher' },
         }));
         return;
       }
@@ -299,8 +354,19 @@ const useStore = create((set, get) => ({
               note: evt.note || '',
             },
           },
+          liveTurnPhase: { ...state.liveTurnPhase, [evt.responseId]: 'awaiting_teacher' },
         }));
         return;
+      }
+      if (evt.status === 'submitted') {
+        set(state => ({ liveTurnPhase: { ...state.liveTurnPhase, [evt.responseId]: 'ai_processing' } }));
+      } else if (evt.status === 'processed') {
+        set(state => ({
+          liveTurnPhase: {
+            ...state.liveTurnPhase,
+            [evt.responseId]: evt.response?.teacher_reviewed ? 'done' : 'awaiting_teacher',
+          },
+        }));
       }
       const prevRound = get().liveRounds[evt.responseId] || 0;
       const nextRound = evt.round || prevRound;
@@ -470,8 +536,10 @@ const useStore = create((set, get) => ({
       rating: rating || '',
     });
     await get().setLiveStatus(responseId, 'processed', updated);
+    set(state => ({ liveTurnPhase: { ...state.liveTurnPhase, [responseId]: 'done' } }));
     return updated;
   },
+
 
   openStudentWindow: (studentId) => {
     const { courseId, liveTopicId } = get();

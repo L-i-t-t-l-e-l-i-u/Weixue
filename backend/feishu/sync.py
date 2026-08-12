@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from database import (
     Course,
     FeishuBinding,
+    PrepPlan,
     Student,
     StudentResponse,
 )
@@ -37,12 +38,13 @@ from database import (
 from .bitable import BitableService
 from .client import FeishuClient, FeishuConfig
 
-TABLE_KEYS = ("courses", "topics", "students", "responses")
+TABLE_KEYS = ("courses", "topics", "students", "responses", "prep_plans")
 ENTITY_TYPE_BY_TABLE = {
     "courses": "course",
     "topics": "topic",
     "students": "student",
     "responses": "response",
+    "prep_plans": "prep_plan",
 }
 
 _SOURCE_LABELS = {
@@ -161,6 +163,36 @@ def build_response_record(response, student, topic) -> dict:
             "教师批注": response.teacher_note or "",
             "状态": _single(status),
             "更新时间": _ms(datetime.utcnow()),
+        }
+    }
+
+
+def build_prep_plan_record(plan, course, topic_map: dict) -> dict:
+    """Bitable row for one course's lesson-prep plan."""
+    order_lines = []
+    note_lines = []
+    for idx, tid in enumerate(plan.lesson_plan or [], start=1):
+        topic = topic_map.get(tid)
+        title = topic.title if topic else f"辩题#{tid}"
+        order_lines.append(f"{idx}. {title}")
+        note = (plan.notes or {}).get(str(tid), "")
+        if note:
+            note_lines.append(f"{idx}. {title}：{note}")
+    summary = getattr(plan, "summary", None) or {}
+    summary_text = "\n".join(
+        x for x in (
+            str(summary.get("overview") or ""),
+            str(summary.get("problems") or ""),
+        ) if x
+    )
+    return {
+        "fields": {
+            "班级": course.class_name,
+            "计划状态": _single("已确认" if plan.confirmed else "草稿"),
+            "讲评顺序": "\n".join(order_lines),
+            "备注": "\n".join(note_lines),
+            "AI总结": summary_text,
+            "更新时间": _ms(plan.updated_at or datetime.utcnow()),
         }
     }
 
@@ -303,6 +335,42 @@ class BitableSyncer:
                 build_response_record(resp, resp.student, resp.topic),
                 summary,
             )
+        plan = db.query(PrepPlan).filter(PrepPlan.course_id == course_id).first()
+        if plan:
+            topic_map = {t.id: t for t in course.topics}
+            await self._sync_one(
+                db,
+                "prep_plans",
+                plan,
+                build_prep_plan_record(plan, course, topic_map),
+                summary,
+            )
+        return summary
+
+    async def sync_prep_plan(self, db: Session, course_id: int) -> dict:
+        """Sync only the course's lesson-prep plan (after save/confirm)."""
+        if not self.available:
+            return {"configured": False, "mode": "deferred", "tables": {}}
+        course = db.get(Course, course_id)
+        if not course:
+            return {"configured": True, "error": "course not found"}
+        plan = db.query(PrepPlan).filter(PrepPlan.course_id == course_id).first()
+        if not plan:
+            return {"configured": True, "status": "skipped", "reason": "no plan"}
+        summary = {
+            "configured": True,
+            "tables": {
+                "prep_plans": {"created": 0, "updated": 0, "errors": 0, "skipped": 0}
+            },
+        }
+        topic_map = {t.id: t for t in course.topics}
+        await self._sync_one(
+            db,
+            "prep_plans",
+            plan,
+            build_prep_plan_record(plan, course, topic_map),
+            summary,
+        )
         return summary
 
     async def sync_response(self, db: Session, response_id: int) -> dict:

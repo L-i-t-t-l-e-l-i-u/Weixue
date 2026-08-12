@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import useStore from '../stores/gradingStore';
+import { ratingToNumber, passLineForGrade } from '../utils/ratings';
 
 const STATUS_META = {
   not_started: { label: '未发言', cls: 'bg-slate-100 text-slate-500', dot: 'bg-slate-300' },
@@ -15,15 +16,13 @@ const RATING_META = {
   echo: { label: '⚠️ 复述/未表达', cls: 'bg-red-500 text-white hover:bg-red-600' },
 };
 
-const TIER_LABEL = { basic: '低', developing: '中', advancing: '高' };
-
 export default function LiveCockpit() {
   const store = useStore();
   const {
     course, students, topics, responses, liveTopicId,
     liveStatus, liveSuggestions, liveDialogue, liveAdopted, liveBusy,
     liveTranscripts, liveAiQuestions, liveFinished, liveEchoRisk,
-    liveMode, livePaused, livePendingSuggestions,
+    liveMode, livePaused, livePendingSuggestions, liveTurnPhase,
   } = store;
   const [noteDrafts, setNoteDrafts] = useState({});
   const [askDrafts, setAskDrafts] = useState({});
@@ -61,6 +60,9 @@ export default function LiveCockpit() {
     const resp = respFor(student.id);
     const status = statusOf(student.id);
     const signals = [];
+    if (resp && status === 'processed' && !resp.teacher_reviewed) {
+      signals.push({ key: 'toreview', label: '待确认', cls: 'bg-red-100 text-red-700', score: 0 });
+    }
     if (resp && (liveFinished[resp.id] || resp.dialogue_finished) && status !== 'processed') {
       signals.push({ key: 'pending', label: '待评估', cls: 'bg-red-100 text-red-700', score: 0 });
     }
@@ -90,6 +92,15 @@ export default function LiveCockpit() {
     const r = respFor(s.id);
     return r?.teacher_reviewed;
   }).length;
+  // 达标 = 已确认且均分 ≥ 该生年级合格线（1-3年级 ≥2.5，4-6年级及以上 ≥3.0）。
+  const passCount = students.filter(s => {
+    const r = respFor(s.id);
+    if (!r || !r.teacher_reviewed) return false;
+    const scores = r.teacher_dimension_scores || r.ai_dimension_scores || {};
+    const vals = Object.values(scores).map(ratingToNumber).filter(v => v !== null);
+    const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    return avg > 0 && avg >= passLineForGrade(s.grade);
+  }).length;
 
   const handleAdopt = async (resp, question) => {
     await store.adoptSuggestion(resp.id, question);
@@ -104,6 +115,15 @@ export default function LiveCockpit() {
   };
 
   const openStudent = (studentId) => store.openStudentWindow(studentId);
+
+  const handleClearSpeech = async () => {
+    if (!window.confirm('清除全班当前所有发言？所有作答、对话和评估都会被删除（学生与辩题保留），此操作不可恢复。')) return;
+    try {
+      await store.clearLiveSpeech();
+    } catch (e) {
+      window.alert(`清除失败：${e?.response?.data?.detail || e?.message || '未知错误'}`);
+    }
+  };
 
   const renderTeacherAsk = (resp) => {
     const adoptedQ = liveAdopted[resp.id];
@@ -161,7 +181,7 @@ export default function LiveCockpit() {
     );
   };
 
-  const renderResult = (resp) => {
+  const renderResult = (resp, student) => {
     const scores = resp.teacher_dimension_scores || resp.ai_dimension_scores || {};
     const isReviewed = resp.teacher_reviewed;
     const rating = resp.teacher_rating;
@@ -170,14 +190,18 @@ export default function LiveCockpit() {
     return (
       <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
         {isReviewed ? (
-          <div className="flex items-center gap-2">
-            {ratingMeta ? (
-              <span className={`text-xs font-bold rounded-full px-2.5 py-1 ${ratingMeta.cls}`}>{ratingMeta.label}</span>
-            ) : (
-              <span className="text-xs font-bold rounded-full px-2.5 py-1 bg-indigo-600 text-white">已确认</span>
+          <>
+            <div className="flex items-center gap-2">
+              {ratingMeta ? (
+                <span className={`text-xs font-bold rounded-full px-2.5 py-1 ${ratingMeta.cls}`}>{ratingMeta.label}</span>
+              ) : (
+                <span className="text-xs font-bold rounded-full px-2.5 py-1 bg-indigo-600 text-white">已确认</span>
+              )}
+            </div>
+            {resp.teacher_note && (
+              <div className="mt-1.5 text-xs text-slate-500 truncate">{resp.teacher_note}</div>
             )}
-            {resp.teacher_note && <span className="text-xs text-slate-500 truncate">{resp.teacher_note}</span>}
-          </div>
+          </>
         ) : (
           <>
             <div className="flex flex-wrap gap-1 mb-2">
@@ -232,18 +256,56 @@ export default function LiveCockpit() {
     const resp = respFor(student.id);
     const status = statusOf(student.id);
     const meta = STATUS_META[status] || STATUS_META.not_started;
-    const tier = TIER_LABEL[student.cognitive_tier] || '';
     const isHistory = !!resp && !liveStatus[resp.id];
     const signals = studentSignals(student);
+    const accent = {
+      recording: 'border-t-red-400', submitted: 'border-t-blue-400',
+      processing: 'border-t-amber-400', processed: 'border-t-green-500',
+      not_started: 'border-t-slate-200',
+    }[status] || 'border-t-slate-200';
+    const avatarCls = {
+      recording: 'bg-red-100 text-red-600', submitted: 'bg-blue-100 text-blue-600',
+      processing: 'bg-amber-100 text-amber-600', processed: 'bg-green-100 text-green-700',
+      not_started: 'bg-slate-100 text-slate-400',
+    }[status] || 'bg-slate-100 text-slate-400';
+    // 及格与否：按该生年级合格线判断（1-3年级 ≥2.5，4-6年级及以上 ≥3.0）
+    const scoreVals = Object.values(resp?.teacher_dimension_scores || resp?.ai_dimension_scores || {})
+      .map(ratingToNumber).filter(v => v !== null);
+    const avgScore = scoreVals.length ? scoreVals.reduce((a, b) => a + b, 0) / scoreVals.length : 0;
+    const passing = avgScore > 0 && avgScore >= passLineForGrade(student.grade);
+    const phase = resp ? liveTurnPhase[resp.id] : null;
+    const phaseMeta = {
+      awaiting_teacher: { label: '待老师发回', cls: 'bg-amber-100 text-amber-700' },
+      awaiting_student: { label: '等学生发言', cls: 'bg-blue-100 text-blue-600' },
+      ai_processing: { label: 'AI 处理中', cls: 'bg-slate-100 text-slate-500' },
+    }[phase];
     return (
-      <div key={student.id} className={`rounded-2xl border bg-white p-4 shadow-sm ${status === 'recording' ? 'border-red-300' : 'border-slate-200'}`}>
+      <div key={student.id} className={`rounded-2xl border-t-4 border border-slate-200 bg-white p-4 shadow-sm ${accent}`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className={`w-2.5 h-2.5 rounded-full ${meta.dot}`} />
-            <span className="font-semibold text-slate-800">{student.name}</span>
-            {tier && <span className="text-[10px] bg-indigo-50 text-indigo-600 rounded px-1.5 py-0.5">{tier}年级段</span>}
+            <span className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${avatarCls}`}>
+              {student.name.slice(0, 1)}
+            </span>
+            <div>
+              <div className="font-semibold text-slate-800">{student.name}</div>
+              <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`} />
+                {student.grade}年级
+              </div>
+            </div>
           </div>
-          <span className={`text-[10px] font-medium rounded-full px-2 py-0.5 ${meta.cls}`}>{meta.label}</span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className={`text-[10px] font-medium rounded-full px-2 py-0.5 ${phaseMeta ? phaseMeta.cls : meta.cls}`}>
+              {phaseMeta ? phaseMeta.label : meta.label}
+            </span>
+            {status === 'processed' && resp && (
+              <span className={`text-[10px] font-medium rounded-full px-2 py-0.5 ${
+                passing ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}>
+                {passing ? '达标' : '未及格'}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
@@ -299,7 +361,7 @@ export default function LiveCockpit() {
         )}
 
         {resp && status === 'submitted' && renderTeacherAsk(resp)}
-        {resp && (status === 'processed') && renderResult(resp)}
+        {resp && (status === 'processed') && renderResult(resp, student)}
         {resp && status === 'processing' && (
           <div className="mt-3 text-center text-xs text-amber-500">⏳ AI 评估处理中…</div>
         )}
@@ -345,6 +407,28 @@ export default function LiveCockpit() {
       return { rid: Number(rid), studentName: st?.name || `#${rid}`, q };
     }),
   );
+  // 处理队列：需要老师出手的学生（待确认/待评估/复述风险/3轮已满/处理中），
+  // 按优先级排序；教师点「已处理」移出，状态再次变化时自动重新入队。
+  const queueItems = sortedStudents
+    .map(s => {
+      const resp = respFor(s.id);
+      const signals = resp ? studentSignals(s) : [];
+      const phase = resp ? liveTurnPhase[resp.id] : null;
+      // “待发回”只在处理队列里出现（卡片右上角气泡已展示，避免重复）。
+      if (
+        resp && phase === 'awaiting_teacher' && statusOf(s.id) !== 'processed'
+        && !(liveFinished[resp.id] || resp.dialogue_finished)
+      ) {
+        signals.push({ key: 'to_send', label: '待发回', cls: 'bg-amber-100 text-amber-700', score: 0.5 });
+      }
+      return { student: s, resp, signals };
+    })
+    .filter(item => item.signals.length > 0)
+    .sort((a, b) => {
+      const sa = Math.min(...a.signals.map(x => x.score));
+      const sb = Math.min(...b.signals.map(x => x.score));
+      return sa - sb;
+    });
 
   return (
     <div className="flex flex-col xl:flex-row gap-4 items-start">
@@ -352,7 +436,7 @@ export default function LiveCockpit() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-lg font-bold text-slate-800">{course?.class_name} · {course?.title}</div>
-            <div className="text-xs text-slate-400 mt-0.5">课堂模式 · 直播间专用（实时状态来自学生端）</div>
+            <div className="text-xs text-slate-400 mt-0.5">课堂模式 · 合格线：1-3年级 ≥2.5，4-6年级及以上 ≥3.0（按学生年级判断达标）</div>
           </div>
           <div className="flex items-center gap-2 text-xs">
             <span className="text-[11px] text-slate-500 whitespace-nowrap">
@@ -361,7 +445,7 @@ export default function LiveCockpit() {
             <select
               value={topic?.id || ''}
               onChange={e => store.setLiveTopic(parseInt(e.target.value, 10))}
-              className="border border-slate-200 rounded-lg px-2 py-1.5 outline-none"
+              className="border border-slate-200 rounded-lg px-2 py-1.5 outline-none bg-white text-xs max-w-[180px]"
             >
               {topics.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
             </select>
@@ -372,13 +456,36 @@ export default function LiveCockpit() {
             >
               下一环节 →
             </button>
-            <span className="bg-blue-50 text-blue-600 rounded-full px-2.5 py-1 font-medium">发言 {spokenCount}/{students.length}</span>
-            <span className="bg-purple-50 text-purple-600 rounded-full px-2.5 py-1 font-medium">已结束 {finishedCount}/{students.length}</span>
-            <span className="bg-green-50 text-green-700 rounded-full px-2.5 py-1 font-medium">已确认 {reviewedCount}/{students.length}</span>
-            {pendingCount > 0 && (
-              <span className="bg-red-50 text-red-600 rounded-full px-2.5 py-1 font-medium">待评估 {pendingCount}</span>
-            )}
-            <div className="w-32 h-1.5 bg-slate-100 rounded-full overflow-hidden" title="全班评估进度">
+            <button
+              onClick={handleClearSpeech}
+              title="调试用：清空全班所有发言，重新开始"
+              className="text-[11px] px-3 py-1.5 rounded-lg border border-red-200 text-red-600 bg-white hover:bg-red-50 cursor-pointer"
+            >
+              🧹 清除发言
+            </button>
+          </div>
+        </div>
+
+        {/* 课堂统计卡 */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {[
+            { label: '已发言', value: `${spokenCount}/${students.length}`, cls: 'text-blue-600', dot: 'bg-blue-500' },
+            { label: '已结束对话', value: `${finishedCount}/${students.length}`, cls: 'text-purple-600', dot: 'bg-purple-500' },
+            { label: '已确认', value: `${reviewedCount}/${students.length}`, cls: 'text-green-600', dot: 'bg-green-500' },
+            { label: '达标', value: `${passCount}/${reviewedCount}`, cls: 'text-emerald-600', dot: 'bg-emerald-500' },
+            { label: '待评估', value: `${pendingCount}`, cls: pendingCount > 0 ? 'text-red-600' : 'text-slate-400', dot: pendingCount > 0 ? 'bg-red-500' : 'bg-slate-300' },
+          ].map(stat => (
+            <div key={stat.label} className="rounded-xl bg-white border border-slate-200 px-3 py-2 flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${stat.dot}`} />
+              <div>
+                <div className="text-[10px] text-slate-400 leading-none">{stat.label}</div>
+                <div className={`text-sm font-bold mt-0.5 ${stat.cls}`}>{stat.value}</div>
+              </div>
+            </div>
+          ))}
+          <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
+            <div className="text-[10px] text-slate-400 leading-none">评估进度</div>
+            <div className="mt-1.5 h-1.5 bg-slate-100 rounded-full overflow-hidden">
               <div
                 className="h-full bg-green-500 rounded-full transition-all"
                 style={{ width: `${students.length ? Math.round((reviewedCount / students.length) * 100) : 0}%` }}
@@ -394,6 +501,59 @@ export default function LiveCockpit() {
 
       {/* ── AI 伴学控制台 ── */}
       <aside className="w-full xl:w-80 shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
+        {/* 处理队列 */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm font-semibold text-slate-700">处理队列</div>
+            {queueItems.length > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">
+                {queueItems.length} 人待处理
+              </span>
+            )}
+          </div>
+          {queueItems.length === 0 ? (
+            <div className="text-[11px] text-slate-300">队列为空，学生发言或 AI 评估完成会自动进入</div>
+          ) : (
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              {queueItems.map(({ student, resp, signals }) => {
+                const pendingQ = resp ? (livePendingSuggestions[resp.id]?.questions?.[0] || '') : '';
+                return (
+                  <div key={student.id} className="rounded-lg border border-red-100 bg-red-50/40 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-medium text-slate-700">
+                        {student.name} <span className="text-slate-400">{student.grade}年级</span>
+                      </span>
+                      <div className="flex gap-1 shrink-0">
+                        {pendingQ && (
+                          <button
+                            onClick={() => resp && store.sendAiSuggestion(resp.id, pendingQ)}
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-200 text-emerald-700 bg-white cursor-pointer hover:bg-emerald-50"
+                          >
+                            发送
+                          </button>
+                        )}
+                        <button
+                          onClick={() => openStudent(student.id)}
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-indigo-200 text-indigo-600 bg-white cursor-pointer hover:bg-indigo-50"
+                        >
+                          窗口
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex gap-1 flex-wrap mt-1">
+                      {signals.map(sig => (
+                        <span key={sig.key} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${sig.cls}`}>
+                          {sig.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <div className="text-sm font-semibold text-slate-700">AI 伴学控制台</div>
 
         <div className="flex items-center gap-2">

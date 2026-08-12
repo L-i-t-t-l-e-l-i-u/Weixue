@@ -1,13 +1,15 @@
 /**
  * Demo API client — returns data from embedded JSON, no backend needed.
- * Used when VITE_DEMO_MODE=true (e.g. GitHub Pages deployment).
+ * Used by the runtime 演示模式 (see config/mode.js) — e.g. GitHub Pages.
  *
  * Key: demo-data.json is exported directly from SQLite, where JSON fields
  * are stored as TEXT strings. The backend normally parses these via Pydantic,
  * so we must parse them here before returning to the frontend.
  */
 import demoData from '../demo-data.json';
-import { computePrepAnalytics, computeClassReport } from '../utils/analytics';
+import {
+  computePrepAnalytics, computePrepInsights, computeClassReport, DIM_LABELS,
+} from '../utils/analytics';
 import { normalizeScores } from '../utils/ratings';
 
 const _clone = (v) => JSON.parse(JSON.stringify(v));
@@ -219,19 +221,28 @@ export const reviewResponse = (rid, data) => {
 };
 
 export const importAudio = (cid, studentId, topicId, file, source) => {
-  const resp = _data.responses.find(
+  let resp = _data.responses.find(
     r => r.student_id === studentId && r.topic_id === topicId
   );
-  if (resp) {
-    resp.raw_text = DEMO_TRANSCRIPT;
-    resp.source = source || 'audio';
-    resp.cleaned_text = '';
-    resp.ai_dimension_scores = null;
-    resp.ai_confidence = 'uncertain';
-    resp.teacher_reviewed = false;
-    resp.teacher_rating = '';
-    resp.processing_status = 'submitted';
-    _status[resp.id] = 'submitted';
+  if (!resp) {
+    resp = { id: Math.max(0, ..._data.responses.map(r => r.id)) + 1, student_id: studentId, topic_id: topicId };
+    _data.responses.push(resp);
+  }
+  resp.raw_text = DEMO_TRANSCRIPT;
+  resp.source = source || 'audio';
+  resp.cleaned_text = '';
+  resp.ai_dimension_scores = null;
+  resp.ai_confidence = 'uncertain';
+  resp.teacher_reviewed = false;
+  resp.teacher_rating = '';
+  resp.processing_status = 'submitted';
+  _status[resp.id] = 'submitted';
+  // 首轮发言也要进对话轮次（与真实后端一致），否则学生端轮询/时间线会丢第一轮。
+  if (!(_dialogue[resp.id] || []).some(t => t.role === 'student')) {
+    (_dialogue[resp.id] ||= []).push({
+      id: Date.now(), response_id: resp.id, role: 'student',
+      content: DEMO_TRANSCRIPT, turn_type: '', created_at: new Date().toISOString(),
+    });
   }
   _persist();
   return ok(_parseResponse(resp));
@@ -251,6 +262,13 @@ export const importText = (cid, studentId, topicId, text, source) => {
   resp.teacher_rating = '';
   resp.processing_status = 'submitted';
   _status[resp.id] = 'submitted';
+  // 首轮发言也要进对话轮次（与真实后端一致），否则学生端轮询/时间线会丢第一轮。
+  if (!(_dialogue[resp.id] || []).some(t => t.role === 'student')) {
+    (_dialogue[resp.id] ||= []).push({
+      id: Date.now(), response_id: resp.id, role: 'student',
+      content: text, turn_type: '', created_at: new Date().toISOString(),
+    });
+  }
   _persist();
   return ok(_parseResponse(resp));
 };
@@ -437,6 +455,29 @@ export const resetCourse = (cid) => {
   return ok({ ok: true });
 };
 
+export const clearCourseResponses = (cid) => {
+  const studentIds = new Set(
+    _data.students.filter(s => s.course_id === cid).map(s => s.id),
+  );
+  const topicIds = new Set(
+    _data.topics.filter(t => t.course_id === cid).map(t => t.id),
+  );
+  const removedIds = new Set(
+    _data.responses
+      .filter(r => studentIds.has(r.student_id) && topicIds.has(r.topic_id))
+      .map(r => r.id),
+  );
+  _data.responses = _data.responses.filter(r => !removedIds.has(r.id));
+  const keptIds = new Set(_data.responses.map(r => r.id));
+  Object.keys(_status).forEach(k => { if (!keptIds.has(Number(k))) delete _status[k]; });
+  Object.keys(_dialogue).forEach(k => { if (!keptIds.has(Number(k))) delete _dialogue[k]; });
+  Object.keys(_lastSuggestion).forEach(k => { if (!keptIds.has(Number(k))) delete _lastSuggestion[k]; });
+  // 备课辅助的讲评计划（顺序/备注/总结）一并清掉。
+  try { localStorage.removeItem(`weixue-prep-plan-${cid}`); } catch { /* ignore */ }
+  _persist();
+  return ok({ ok: true, responses_cleared: removedIds.size });
+};
+
 // ── Comments ────────────────────────────────────────────
 export const generateComment = (cid, studentId) => {
   const s = _data.students.find(s => s.id === studentId);
@@ -483,6 +524,188 @@ export const getPrepAnalytics = (cid) => {
   return ok(computePrepAnalytics(students, topics, responses));
 };
 
+const _courseData = (cid) => {
+  const students = _data.students.filter(student => student.course_id === cid);
+  const topics = _data.topics.filter(topic => topic.course_id === cid).map(_parseTopic);
+  const studentIds = new Set(students.map(student => student.id));
+  const responses = _data.responses
+    .map(_parseResponse)
+    .filter(response => studentIds.has(response.student_id));
+  return { students, topics, responses };
+};
+
+export const getPrepInsights = (cid) => {
+  const { students, topics, responses } = _courseData(cid);
+  return ok(computePrepInsights(students, topics, responses, cid));
+};
+
+// 演示模式没有 LLM：用与后端 _template_prep_summary 相同的规则生成确定性总结。
+export const generatePrepSummary = (cid) => {
+  const { students, topics, responses } = _courseData(cid);
+  const insights = computePrepInsights(students, topics, responses, cid);
+  const p = insights.participation;
+  const tier = insights.tier_summary;
+  const tierLabels = {
+    basic: '基础层（1-2年级）', developing: '发展层（3-5年级）', advancing: '进阶层（6-7年级）',
+  };
+  const tierText = Object.entries(tier)
+    .map(([k, v]) => `${tierLabels[k] || k} ${v.students}人、均分${v.avg_score}`)
+    .join('；');
+  const overview =
+    `全班 ${p.students_answered} 名学生共提交 ${p.responses_total} 份作答，整体参与度良好。`
+    + (tierText ? `各认知梯段表现：${tierText}。` : '')
+    + '建议在讲评课上先肯定整体亮点，再针对薄弱维度做引导。';
+  const weak = insights.problem_patterns;
+  const problems = weak.length
+    ? weak.slice(0, 4).map(w =>
+        `- ${w.label}维度偏弱，影响 ${w.students_affected} 名学生、${w.topics_affected} 道辩题。`)
+      .join('\n')
+    : '- 当前未发现低于合格线的维度，可进入拓展与深度追问。';
+  const suggestions =
+    '- 讲评时先展示 1-2 份优质发言，说明好在哪里（结构或证据）；\n'
+    + '- 针对最弱的 1-2 个维度设计当堂小练习，例如补充证据或换位思考；\n'
+    + '- 关注低分学生名单，安排小组互评或个别追问。';
+  const summary = {
+    overview,
+    problems,
+    suggestions,
+    generated_by: 'template',
+    generated_at: new Date().toISOString(),
+  };
+  // 与真实后端一致：生成即持久化（保留已生成的分题总结）。
+  const plan = { lesson_plan: [], notes: {}, confirmed: false, summary: {} };
+  const stored = _readPlan(cid);
+  if (stored) Object.assign(plan, stored);
+  plan.summary = { ...(plan.summary || {}), ...summary };
+  plan.savedAt = new Date().toISOString();
+  try { localStorage.setItem(_planKey(cid), JSON.stringify(plan)); } catch { /* ignore */ }
+  return ok(summary);
+};
+
+// ── Prep Plan (备课辅助 · 讲评计划) ─────────────────────
+// Demo 模式没有后端，讲评计划沿用浏览器本地存储（跨窗口/刷新保留）。
+const _planKey = (cid) => `weixue-prep-plan-${cid}`;
+
+export const getPrepPlan = (cid) => {
+  try {
+    const raw = localStorage.getItem(_planKey(cid));
+    if (raw) {
+      const saved = JSON.parse(raw);
+      const lessonPlan = Array.isArray(saved.lesson_plan)
+        ? saved.lesson_plan
+        : Array.isArray(saved.lessonPlan) ? saved.lessonPlan : [];
+      if (lessonPlan.length || saved.notes) {
+        return ok({
+          course_id: cid,
+          lesson_plan: lessonPlan,
+          notes: saved.notes || {},
+          confirmed: !!saved.confirmed,
+          summary: saved.summary || {},
+          updated_at: saved.savedAt || saved.updated_at || null,
+        });
+      }
+    }
+  } catch { /* corrupted storage ignored */ }
+  return ok({ course_id: cid, lesson_plan: [], notes: {}, confirmed: false, summary: {}, updated_at: null });
+};
+
+export const savePrepPlan = (cid, data) => {
+  let prev = null;
+  try {
+    const raw = localStorage.getItem(_planKey(cid));
+    if (raw) prev = JSON.parse(raw);
+  } catch { /* ignore */ }
+  const plan = {
+    lesson_plan: data.lesson_plan || [],
+    notes: data.notes || {},
+    confirmed: !!data.confirmed,
+    summary: data.summary || (prev && prev.summary) || {},
+    savedAt: new Date().toISOString(),
+  };
+  try {
+    localStorage.setItem(_planKey(cid), JSON.stringify(plan));
+  } catch { /* quota/security errors ignored */ }
+  return ok({ course_id: cid, ...plan, updated_at: plan.savedAt });
+};
+
+export const pushPrepPlanCard = (cid) => ok({
+  ok: true,
+  status: 'pending_delivery',
+  message: '演示模式：飞书机器人卡片仅在真实后端可用（待联调）。',
+});
+
+const _templateTopicSummary = (row, highlights) => {
+  const dims = row && row.avg_dimension_scores
+    ? Object.entries(row.avg_dimension_scores)
+        .map(([d, v]) => `${DIM_LABELS[d] || d}${v}`)
+        .join('、')
+    : '暂无评分';
+  const weak = (row && row.weak_dimensions) || [];
+  const problems = weak.length
+    ? weak.map(d => `- ${DIM_LABELS[d] || d}维度偏弱。`).join('\n')
+    : '- 未发现低于合格线的维度，可进入拓展追问。';
+  const hl = highlights.slice(0, 2);
+  const suggestions = hl.length
+    ? `- 讲评时可展示 ${hl.map(h => h.student_name).join('、')} 的优质发言。\n- 针对薄弱维度设计当堂小练习。`
+    : '- 先带学生重新梳理本题的立场与理由，再逐步补充证据；\n- 可用反例启发学生换位思考。';
+  return { overview: `本题各维度均分：${dims}。`, problems, suggestions, generated_by: 'template' };
+};
+
+const _readPlan = (cid) => {
+  try {
+    const raw = localStorage.getItem(_planKey(cid));
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return null;
+};
+
+export const generateTopicSummary = (cid, tid) => {
+  const { students, topics, responses } = _courseData(cid);
+  const insights = computePrepInsights(students, topics, responses, cid);
+  const row = computePrepAnalytics(students, topics, responses)
+    .find(r => r.topic_id === tid) || null;
+  const hl = (insights.topic_highlights || []).filter(h => h.topic_id === tid).slice(0, 2);
+  const summary = {
+    ..._templateTopicSummary(row, hl),
+    generated_at: new Date().toISOString(),
+  };
+  const plan = { lesson_plan: [], notes: {}, confirmed: false, summary: {} };
+  const stored = _readPlan(cid);
+  if (stored) Object.assign(plan, stored);
+  const topicsMap = { ...((plan.summary && plan.summary.topics) || {}) };
+  topicsMap[String(tid)] = summary;
+  plan.summary = { ...(plan.summary || {}), topics: topicsMap };
+  plan.savedAt = new Date().toISOString();
+  try { localStorage.setItem(_planKey(cid), JSON.stringify(plan)); } catch { /* ignore */ }
+  return ok(summary);
+};
+
+export const savePrepSummary = (cid, data) => {
+  const plan = { lesson_plan: [], notes: {}, confirmed: false, summary: {} };
+  const stored = _readPlan(cid);
+  if (stored) Object.assign(plan, stored);
+  const summary = plan.summary || {};
+  if (data.topic_id) {
+    const topicsMap = { ...(summary.topics || {}) };
+    const cur = { ...(topicsMap[String(data.topic_id)] || {}) };
+    ['overview', 'problems', 'suggestions'].forEach(k => {
+      if (data[k] !== undefined) cur[k] = data[k];
+    });
+    cur.edited = true;
+    topicsMap[String(data.topic_id)] = cur;
+    summary.topics = topicsMap;
+  } else {
+    ['overview', 'problems', 'suggestions'].forEach(k => {
+      if (data[k] !== undefined) summary[k] = data[k];
+    });
+    summary.edited = true;
+  }
+  plan.summary = summary;
+  plan.savedAt = new Date().toISOString();
+  try { localStorage.setItem(_planKey(cid), JSON.stringify(plan)); } catch { /* ignore */ }
+  return ok(summary);
+};
+
 // ── Report ──────────────────────────────────────────────
 export const getClassReport = (cid) => {
   const students = _data.students.filter(student => student.course_id === cid);
@@ -504,3 +727,39 @@ export const deleteTag = (tid) => ok({ ok: true });
 // ── Calibrations ────────────────────────────────────────
 export const getCalibrations = (cid) =>
   ok((_data.calibrations || []).map(_parseCalibration));
+
+// ── System mode (演示模式：无后端能力矩阵，动作直接成功) ──
+export const getSystemMode = () => ok({
+  mode: 'demo',
+  demo_course_present: _data.courses.length > 0,
+  asr_provider: 'mock',
+  asr_ready: true,
+  llm_configured: false,
+  feishu_ready: false,
+  bitable_ready: false,
+});
+
+export const setSystemModeAction = (action) => {
+  if (action === 'enter_demo' && _data.courses.length === 0) {
+    _data = _clone(demoData);
+    _persist();
+  }
+  return ok({ ok: true, action });
+};
+
+// ── Feishu Bitable (演示模式：仅真实后端可见) ─────────────
+export const getFeishuBitableStatus = () => ok({
+  mode: 'deferred',
+  configured: false,
+  app_token: '',
+  table_ids: {},
+  bindings: {},
+  message: '演示模式：飞书多维表格状态仅在真实后端可见',
+});
+
+export const syncFeishuBitable = () => ok({
+  status: 'ok',
+  synced: 0,
+  skipped: 0,
+  errors: [],
+});

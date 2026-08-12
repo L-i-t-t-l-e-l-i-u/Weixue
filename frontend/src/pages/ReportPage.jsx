@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import useStore from '../stores/gradingStore';
-import { computeClassReport } from '../utils/analytics';
-import { ratingToNumber, applyBonusUpgrade, bandFromAverage, upgradeBand, normalizeScores } from '../utils/ratings';
+import { applyBonusUpgrade, bandForGrade, passLineForGrade, upgradeBand } from '../utils/ratings';
 import * as api from '../api/client';
 
 const DIM_LABELS = {
@@ -29,9 +28,10 @@ const barColor = (val) => {
   return 'bg-red-500';
 };
 
-const scoreLabel = (avg) => {
+const scoreLabel = (avg, grade) => {
+  const passLine = grade ? passLineForGrade(grade) : 2.5;
   if (avg >= 3.5) return { text: '优秀', cls: 'text-green-600' };
-  if (avg >= 2.5) return { text: '良好', cls: 'text-emerald-600' };
+  if (avg >= passLine) return { text: '良好', cls: 'text-emerald-600' };
   if (avg >= 1.5) return { text: '待提升', cls: 'text-yellow-600' };
   if (avg > 0) return { text: '薄弱', cls: 'text-red-600' };
   return { text: '未评', cls: 'text-slate-400' };
@@ -126,6 +126,11 @@ function ParentReportView({ report, loading, onBack }) {
           <div className="text-xs text-slate-400 mt-0.5">
             {report.grade}年级 · {report.topic_title || '思辨课堂'}
             {report.reviewed ? ' · 已由教师确认' : ' · 待教师确认'}
+            {report.passing !== undefined && (
+              <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] ${report.passing ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                {report.passing ? '✅ 达标' : `⚠️ 未达标（合格线 ${report.pass_line}）`}
+              </span>
+            )}
           </div>
         </div>
         <button
@@ -196,45 +201,44 @@ function ParentReportView({ report, loading, onBack }) {
 }
 
 export default function ReportPage() {
-  const { courseId, students, topics, responses, tags } = useStore();
+  const { courseId, responses } = useStore();
   const [parentSid, setParentSid] = useState(null);
   const [parentReport, setParentReport] = useState(null);
   const [parentLoading, setParentLoading] = useState(false);
+  const [report, setReport] = useState(null);
+  const [reportLoading, setReportLoading] = useState(true);
 
-  const report = useMemo(
-    () => computeClassReport(
-      students,
-      topics,
-      Object.values(responses).flat(),
-      tags,
-      courseId,
-    ),
-    [students, topics, responses, tags, courseId],
-  );
-
-  const classDimScores = useMemo(() => {
-    const dims = {};
-    const studentIds = new Set(students.map((s) => s.id));
-    Object.values(responses)
-      .flat()
-      .filter((r) => r.student_id !== undefined && studentIds.has(r.student_id))
-      .forEach((r) => {
-        const scores = normalizeScores(r.teacher_dimension_scores || r.ai_dimension_scores);
-        const confidence = r.teacher_confidence_override || r.ai_confidence;
-        if (confidence === 'uncertain' && !r.teacher_dimension_scores) return;
-        if (!scores || typeof scores !== 'object') return;
-        Object.entries(scores).forEach(([dim, rating]) => {
-          const v = ratingToNumber(rating);
-          if (v !== null) (dims[dim] ||= []).push(v);
-        });
+  // 报告数据来自后端 /report（唯一口径）；demo 模式由 demoClient 用同一套
+  // computeClassReport 计算。作答变化（教师改分/标签）时自动重新拉取。
+  const reportVersion = useMemo(() => {
+    const parts = [];
+    Object.keys(responses).sort().forEach(sid => {
+      (responses[sid] || []).forEach(r => {
+        parts.push(
+          `${r.id}:${r.teacher_reviewed ? 1 : 0}:`
+          + `${JSON.stringify(r.teacher_dimension_scores || null)}:`
+          + `${(r.teacher_tags || []).join(',')}`,
+        );
       });
-    return Object.fromEntries(
-      Object.entries(dims).map(([dim, vals]) => [
-        dim,
-        Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100,
-      ]),
-    );
-  }, [students, responses]);
+    });
+    return parts.join('|');
+  }, [responses]);
+
+  const loadReport = useCallback(async () => {
+    if (!courseId) return;
+    setReportLoading(true);
+    try {
+      setReport(await api.getClassReport(courseId));
+    } catch (e) {
+      console.warn('获取班级报告失败，请检查后端 /report 接口。', e);
+      setReport(null);
+    }
+    setReportLoading(false);
+  }, [courseId]);
+
+  useEffect(() => {
+    loadReport();
+  }, [courseId, reportVersion, loadReport]);
 
   const openParentReport = async (sid) => {
     setParentSid(sid);
@@ -264,6 +268,9 @@ export default function ReportPage() {
   if (!courseId) {
     return <div className="text-slate-400 py-10 text-center">加载报告...</div>;
   }
+  if (reportLoading && !report) {
+    return <div className="text-slate-400 py-10 text-center">正在加载班级报告...</div>;
+  }
   if (!report || report.student_count === 0) {
     return <div className="text-red-500 py-10 text-center">报告加载失败：暂无班级数据</div>;
   }
@@ -277,7 +284,11 @@ export default function ReportPage() {
         {[
           { label: '参评人数', value: `${report.student_count}人`, color: 'text-slate-600' },
           { label: '班级均分', value: `${report.class_avg.toFixed(1)}/4.0`, color: classLabel.cls },
-          { label: '最高均分', value: report.student_stats.length > 0 ? `${Math.max(...report.student_stats.map(s => s.avg_score)).toFixed(1)}` : '-', color: 'text-green-600' },
+          {
+            label: '达标人数',
+            value: `${report.pass_count ?? 0}人 · ${Math.round((report.pass_rate ?? 0) * 100)}%`,
+            color: 'text-emerald-600',
+          },
           { label: '辩题数', value: report.topic_stats.length, color: 'text-slate-600' },
         ].map((c, i) => (
           <div key={i} className="bg-white rounded-xl p-4 border border-slate-200">
@@ -286,12 +297,15 @@ export default function ReportPage() {
           </div>
         ))}
       </div>
+      <div className="text-[11px] text-slate-400 -mt-3">
+        合格线：1-3年级 ≥2.5（B+），4-6年级及以上 ≥3.0（A-），按学生各自年级判断达标。
+      </div>
 
       {/* Class-level radar */}
       <div className="bg-white rounded-xl p-5 border border-slate-200">
         <h3 className="text-sm font-semibold text-slate-800 mb-2">班级思辨能力雷达</h3>
         <div className="text-[11px] text-slate-400 mb-1">基于全班已确认评分的维度均值（0-4 分）</div>
-        <RadarChart data={classDimScores} labels={DIM_LABELS} />
+        <RadarChart data={report.class_dim_avg} labels={DIM_LABELS} />
       </div>
 
       {/* Per-topic dimension breakdown */}
@@ -329,8 +343,8 @@ export default function ReportPage() {
         <h3 className="text-sm font-semibold text-slate-800 mb-3">学生个体评估</h3>
         <div className="grid grid-cols-3 gap-2">
           {report.student_stats.map(s => {
-            const sl = scoreLabel(s.avg_score);
-            const band = upgradeBand(bandFromAverage(s.avg_score), s.bonus_flags || []);
+            const sl = scoreLabel(s.avg_score, s.grade);
+            const band = upgradeBand(bandForGrade(s.avg_score, s.grade), s.bonus_flags || []);
             const upgraded = band !== sl.text && s.avg_score > 0;
             return (
               <div key={s.student_id} className="p-3 rounded-lg bg-slate-50 border border-slate-100">
@@ -338,6 +352,11 @@ export default function ReportPage() {
                   <div>
                     <span className="text-sm font-medium text-slate-700">{s.name}</span>
                     <span className="text-[10px] text-slate-400 ml-1.5">{s.grade}年级</span>
+                    {s.avg_score > 0 && (
+                      <span className={`ml-1.5 text-[9px] px-1 py-0.5 rounded ${s.passing ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                        {s.passing ? '达标' : '未达标'}
+                      </span>
+                    )}
                     {upgraded && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">加分项↑</span>}
                   </div>
                   <span className={`text-sm font-bold ${sl.cls}`}>{s.avg_score > 0 ? s.avg_score.toFixed(1) : '-'}</span>
@@ -345,6 +364,7 @@ export default function ReportPage() {
                 <div className="text-[11px] text-slate-400 mt-1">
                   {band} · {s.cognitive_tier === 'basic' ? '基础层' : s.cognitive_tier === 'developing' ? '发展层' : '进阶层'}
                   {s.uncertain > 0 ? ` · ${s.uncertain}题存疑` : ''}
+                  {s.pass_line ? ` · 合格线 ≥${s.pass_line.toFixed(1)}` : ''}
                 </div>
                 <button
                   onClick={() => openParentReport(s.student_id)}

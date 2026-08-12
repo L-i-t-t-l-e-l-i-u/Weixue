@@ -11,6 +11,27 @@ RATING_VALUES = {
 
 RATING_OPTIONS = tuple(RATING_VALUES)
 
+# ── 合格线（教师口径，2026-08 确认）────────────────────────
+# 六级评分 0-4 分制下按年级划分：
+#   1-3 年级：≥ 2.5（B+）——“敢说、说清楚、能给出简单理由”
+#   4-6 年级：≥ 3.0（A-）——“观点明确、有依据、能换角度”（7 年级并入此档）
+# 判断按学生自己的年级，混龄班各按各的线。
+PASS_LINE_LOWER_GRADES = (1, 2, 3)
+PASS_LINE_LOWER = 2.5
+PASS_LINE_UPPER = 3.0
+
+
+def pass_line_for_grade(grade) -> float:
+    """Return the passing score line for a student's grade band."""
+    return PASS_LINE_LOWER if int(grade or 0) in PASS_LINE_LOWER_GRADES else PASS_LINE_UPPER
+
+
+def is_passing(grade, value) -> bool:
+    """True when a numeric score meets the student's grade-band pass line."""
+    if value is None:
+        return False
+    return float(value) >= pass_line_for_grade(grade)
+
 
 def rating_to_value(rating: str):
     """Return a numeric value, or None for an invalid/legacy rating."""

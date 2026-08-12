@@ -61,6 +61,8 @@ class Course(Base):
                           cascade="all, delete-orphan", order_by="DebateTopic.order")
     students = relationship("Student", back_populates="course",
                             cascade="all, delete-orphan")
+    prep_plan = relationship("PrepPlan", back_populates="course",
+                             cascade="all, delete-orphan", uselist=False)
 
 
 class DebateTopic(Base):
@@ -286,6 +288,30 @@ class SystemSetting(Base):
     value = Column(Text, default="")
 
 
+class PrepPlan(Base):
+    """One teacher lesson-prep plan per course (workbench 备课辅助).
+
+    lesson_plan: ordered topic ids the teacher chose to review in class.
+    notes:       {topic_id: teacher's own teaching note} (string keys).
+    confirmed:   teacher pressed "确认讲评计划" (the human decision gate).
+
+    The plan is the teacher's draft/decision; AI only aggregates analytics.
+    """
+    __tablename__ = "prep_plans"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False, unique=True)
+    lesson_plan = Column(JSON, default=list)   # [topic_id, ...] in review order
+    notes = Column(JSON, default=dict)         # {str(topic_id): note text}
+    confirmed = Column(Boolean, default=False)
+    summary = Column(JSON, default=dict)
+    # {"overview": "...", "problems": "...", "suggestions": "...",
+    #  "generated_by": "llm"|"template", "generated_at": iso}
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    course = relationship("Course", back_populates="prep_plan")
+
+
 class FeishuBinding(Base):
     """Maps a local entity to a Feishu Bitable record (one-way sync).
 
@@ -346,4 +372,9 @@ def _migrate():
             conn.execute(text("ALTER TABLE student_responses ADD COLUMN processing_status VARCHAR(20) DEFAULT 'not_started'"))
         if "teacher_rating" not in cols:
             conn.execute(text("ALTER TABLE student_responses ADD COLUMN teacher_rating VARCHAR(20) DEFAULT ''"))
+        prep_cols = {
+            row[1] for row in conn.execute(text("PRAGMA table_info(prep_plans)"))
+        }
+        if "summary" not in prep_cols:
+            conn.execute(text("ALTER TABLE prep_plans ADD COLUMN summary JSON"))
         conn.commit()

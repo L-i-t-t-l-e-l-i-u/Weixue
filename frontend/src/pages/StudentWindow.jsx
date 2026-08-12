@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import { subscribeStatus, publishStatus } from '../utils/statusBus';
-
-const IS_DEMO = import.meta.env.VITE_DEMO_MODE === 'true';
+import { getMode, resolveMode, subscribeModeChange } from '../config/mode';
 
 // Demo fallback transcript used when the environment cannot run real ASR.
 const DEMO_TRANSCRIPT =
@@ -22,6 +21,7 @@ const BUBBLE_CLS = {
 };
 
 export default function StudentWindow({ studentId }) {
+  const [isDemo, setIsDemo] = useState(getMode() !== 'real');
   const [courseId, setCourseId] = useState(null);
   const [topicId, setTopicId] = useState(null);
   const [student, setStudent] = useState(null);
@@ -41,6 +41,12 @@ export default function StudentWindow({ studentId }) {
   const [feedback, setFeedback] = useState(null);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [showStimulus, setShowStimulus] = useState(true);
+
+  useEffect(() => {
+    // 模式事实源：自动探测 + 跟随教师端切换（跨窗口经 storage 事件同步）。
+    resolveMode().then(m => setIsDemo(m === 'demo'));
+    return subscribeModeChange(() => setIsDemo(getMode() !== 'real'));
+  }, []);
   const [ended, setEnded] = useState(false);
   const [encouragement, setEncouragement] = useState('');
 
@@ -240,6 +246,21 @@ export default function StudentWindow({ studentId }) {
       }
     } catch (e) {
       console.warn('autoAsk failed:', e);
+      // AI 暂时无响应（超时/后端不可用）也不能让学生干等：发一条备用追问，
+      // 对话继续，教师端仍能看到并接管。
+      const fallback = '你的理由和结论之间是不是缺了什么？要不要补充一下？';
+      try {
+        await api.appendTurn(rid, { role: 'ai_suggestion', content: fallback, turn_type: 'scaffold' });
+      } catch { /* 备用追问持久化失败也继续 */ }
+      setMessages(prev => [...prev, { role: 'ai', content: fallback }]);
+      publishStatus(courseId, {
+        responseId: rid,
+        studentId: Number(studentId),
+        type: 'ai_question',
+        question: fallback,
+        echoRisk: false,
+      });
+      setSimNote('（AI 暂时没响应，已用备用追问）');
     } finally {
       setAiThinking(false);
     }
@@ -320,7 +341,7 @@ export default function StudentWindow({ studentId }) {
         await new Promise(r => setTimeout(r, 600));
       }
       setRecording(false);
-      setSimNote(IS_DEMO ? '（演示环境：使用模拟转写文本）' : '（未获得麦克风权限，请改用粘贴文本）');
+      setSimNote(isDemo ? '（演示环境：使用模拟转写文本）' : '（未获得麦克风权限，请改用粘贴文本）');
       await submitTranscript(DEMO_TRANSCRIPT);
       return;
     }
@@ -335,7 +356,7 @@ export default function StudentWindow({ studentId }) {
         stream.getTracks().forEach(t => t.stop());
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         setRecording(false);
-        if (IS_DEMO) {
+        if (isDemo) {
           setSimNote('（演示环境：录音已采集，转写内容为模拟）');
           await submitTranscript(DEMO_TRANSCRIPT);
         } else {
@@ -551,7 +572,7 @@ export default function StudentWindow({ studentId }) {
             </>
           )}
           <div className="text-[11px] text-slate-400 text-center">
-            {IS_DEMO
+            {isDemo
               ? '演示模式：AI 直接追问，教师端可实时看到你的发言与轮次'
               : '口述内容将由 AI 语音识别转为文字，AI 会接着向你提问'}
           </div>

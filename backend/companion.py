@@ -7,8 +7,12 @@ fill-in-the-blank guidance), and flags when a student answer merely echoes
 the AI/teacher wording (灌输感).
 """
 
+import time
 from typing import Optional
 from grading.llm import LLMClient
+
+# 追问是课堂实时环节：模型慢/挂起必须快速降级，不能让学生等两分钟。
+SUGGEST_LLM_TIMEOUT = 30.0
 
 
 SCAFFOLD_SYSTEM_PROMPT = (
@@ -102,10 +106,19 @@ class CompanionEngine:
             {"role": "system", "content": SCAFFOLD_SYSTEM_PROMPT},
             {"role": "user", "content": "\n\n".join(user_parts)},
         ]
+        started = time.monotonic()
         try:
-            raw = await self.llm.chat_json(messages, temperature=0.3, max_tokens=1000)
+            raw = await self.llm.chat_json(
+                messages,
+                temperature=0.3,
+                max_tokens=1000,
+                timeout=SUGGEST_LLM_TIMEOUT,
+            )
             return self._normalize(raw)
-        except Exception:
+        except Exception as exc:
+            print(
+                f"[companion] suggest_turn LLM 失败（{time.monotonic() - started:.1f}s）: {exc!r}"
+            )
             return self._fallback(response_text)
 
     @staticmethod

@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import useStore from '../stores/gradingStore';
 import * as api from '../api/client';
-import { averageRating, bandFromAverage, upgradeBand, collectBonusFlags } from '../utils/ratings';
+import { averageRating, bandForGrade, passLineForGrade, upgradeBand, collectBonusFlags } from '../utils/ratings';
 const BAND_CLS = {
   优秀: 'text-green-600', 良好: 'text-emerald-600',
   待提升: 'text-yellow-600', 薄弱: 'text-red-600', 未评: 'text-slate-400',
 };
-const ratingLabel = (avg, bonusFlags) => {
-  const band = upgradeBand(bandFromAverage(avg), bonusFlags);
+const ratingLabel = (avg, bonusFlags, grade) => {
+  const band = upgradeBand(bandForGrade(avg, grade), bonusFlags);
   return { text: band, cls: BAND_CLS[band] || BAND_CLS.未评, upgraded: Array.isArray(bonusFlags) && bonusFlags.length > 0 && band !== '未评' };
 };
 
@@ -99,7 +99,8 @@ export default function CommentsPage() {
     }
   });
   const studentAvg = topicCount > 0 ? totalAvg / topicCount : 0;
-  const rl = ratingLabel(studentAvg, collectBonusFlags(resps));
+  const rl = ratingLabel(studentAvg, collectBonusFlags(resps), student.grade);
+  const studentPassing = studentAvg > 0 && studentAvg >= passLineForGrade(student.grade);
 
   const generate = async () => {
     if (!student) return;
@@ -145,7 +146,14 @@ export default function CommentsPage() {
       if (scores) { avg += averageRating(scores); cnt++; }
     });
     const stAvg = cnt > 0 ? avg / cnt : 0;
-    return { name: st.name, idx: i, avg: stAvg, reviewed, hasDraft: !!st.comment_draft, bonus: collectBonusFlags(ss) };
+    const passLine = passLineForGrade(st.grade);
+    return {
+      name: st.name, idx: i, grade: st.grade,
+      avg: stAvg, reviewed, hasDraft: !!st.comment_draft,
+      bonus: collectBonusFlags(ss),
+      passing: stAvg > 0 && stAvg >= passLine,
+      passLine,
+    };
   });
 
   const handleStudentChange = (i) => {
@@ -176,7 +184,7 @@ export default function CommentsPage() {
         <span className="text-xs text-slate-500 shrink-0">选择学生：</span>
         <div className="flex gap-1.5 flex-wrap flex-1">
           {studentInfo.map((si, i) => {
-            const siLabel = ratingLabel(si.avg, si.bonus);
+            const siLabel = ratingLabel(si.avg, si.bonus, si.grade);
             return (
               <button key={i} onClick={() => handleStudentChange(i)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer
@@ -184,6 +192,15 @@ export default function CommentsPage() {
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
                 {si.name}
+                {si.reviewed > 0 && (
+                  <span className={`ml-1.5 text-[10px] px-1 rounded ${
+                    i === currentStudentIdx
+                      ? si.passing ? 'bg-emerald-200 text-emerald-900' : 'bg-red-200 text-red-900'
+                      : si.passing ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'
+                  }`}>
+                    {si.passing ? '达标' : '未达标'}
+                  </span>
+                )}
                 <span className={`ml-1.5 ${i === currentStudentIdx ? 'text-indigo-200' : siLabel.cls}`}>
                   {si.avg > 0 ? siLabel.text : ''}
                 </span>
@@ -238,6 +255,17 @@ export default function CommentsPage() {
                 {rl.text} <span className="text-sm text-slate-400">（均分 {studentAvg.toFixed(1)}/4.0）</span>
                 {rl.upgraded && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">加分项↑</span>}
               </div>
+              {studentAvg > 0 && (
+                <div className={`mb-2 text-xs font-medium px-2.5 py-1.5 rounded-lg border ${
+                  studentPassing
+                    ? 'bg-green-50 border-green-200 text-green-700'
+                    : 'bg-red-50 border-red-200 text-red-700'
+                }`}>
+                  {studentPassing
+                    ? `✅ 已达合格线（${student.grade <= 3 ? '1-3年级' : '4-6年级'} ≥${passLineForGrade(student.grade).toFixed(1)}）`
+                    : `⚠️ 未达合格线（${student.grade <= 3 ? '1-3年级' : '4-6年级'} ≥${passLineForGrade(student.grade).toFixed(1)}）`}
+                </div>
+              )}
               <div className="text-xs text-slate-500 mb-2">
                 教师已批改 <b className="text-indigo-600">{reviewedCount}</b> / {topicCount} 个辩题
               </div>
@@ -255,7 +283,14 @@ export default function CommentsPage() {
                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${isReviewed ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>
                       {isReviewed ? '已批改' : '仅AI'}
                     </span>
-                    <span className={`text-[10px] ${ratingLabel(avg).cls}`}>{ratingLabel(avg).text}</span>
+                    <span className={`text-[10px] ${ratingLabel(avg, [], student.grade).cls}`}>{ratingLabel(avg, [], student.grade).text}</span>
+                    {isReviewed && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                        avg >= passLineForGrade(student.grade) ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'
+                      }`}>
+                        {avg >= passLineForGrade(student.grade) ? '达标' : '未达标'}
+                      </span>
+                    )}
                   </div>
                   {scores && (
                     <div className="flex gap-1 flex-wrap mb-1.5">

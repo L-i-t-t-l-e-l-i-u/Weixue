@@ -6,14 +6,71 @@
  * If BroadcastChannel is unavailable we fall back to localStorage storage
  * events, which also fire across tabs.
  *
- * Real mode: swap this module for a WebSocket/SSE-backed bus that keeps the
- * same publish/subscribe API (see 现场伴学设计与前端重构方案_v1.md §3.3).
+ * Real mode: keep the same publish/subscribe API but drive it with a short
+ * polling fallback (the documented P1 path in 现场伴学设计_v1 §3.3): the
+ * backend is the source of truth, so each poll re-reads responses and emits
+ * change events — this works across devices, not just within one browser.
  */
+
+import { resolveMode } from '../config/mode';
+import { deriveResponseStatus } from './status';
+import { getResponses } from '../api/client';
 
 const PREFIX = 'weixue-live-';
 let _channel = null;
 let _listeners = new Set();
 let _storageHandler = null;
+let _pollTimer = null;
+let _pollCid = null;
+const _lastPollSig = new Map();
+
+const POLL_INTERVAL_MS = 3000;
+
+function _pollOnce(courseId) {
+  getResponses(courseId)
+    .then(resps => {
+      (resps || []).forEach(r => {
+        const status = deriveResponseStatus(r);
+        const sig = [
+          status,
+          r.teacher_reviewed ? 1 : 0,
+          JSON.stringify(r.teacher_dimension_scores || null),
+          (r.raw_text || '').length,
+        ].join('|');
+        if (_lastPollSig.get(r.id) === sig) return;
+        _lastPollSig.set(r.id, sig);
+        _listeners.forEach(fn => {
+          try {
+            fn({ courseId, responseId: r.id, status, response: r });
+          } catch (err) {
+            console.error('[statusBus] poll listener error', err);
+          }
+        });
+      });
+    })
+    .catch(() => { /* backend unreachable — keep polling, demo switch handles UI */ });
+}
+
+function _ensurePolling(courseId) {
+  if (_pollCid === courseId && _pollTimer) return;
+  _stopPolling();
+  _pollCid = courseId;
+  resolveMode().then(mode => {
+    if (mode !== 'real' || _pollCid !== courseId) return;
+    _lastPollSig.clear();
+    _pollOnce(courseId);
+    _pollTimer = setInterval(() => _pollOnce(courseId), POLL_INTERVAL_MS);
+  });
+}
+
+function _stopPolling() {
+  if (_pollTimer) {
+    clearInterval(_pollTimer);
+    _pollTimer = null;
+  }
+  _pollCid = null;
+  _lastPollSig.clear();
+}
 
 function channelName(courseId) {
   return `${PREFIX}${courseId || 'default'}`;
@@ -58,7 +115,11 @@ function ensureChannel(courseId) {
 export function subscribeStatus(courseId, cb) {
   _listeners.add(cb);
   ensureChannel(courseId);
-  return () => _listeners.delete(cb);
+  _ensurePolling(courseId);
+  return () => {
+    _listeners.delete(cb);
+    if (_listeners.size === 0) _stopPolling();
+  };
 }
 
 /** Publish a status event: { responseId, status, studentId, payload }. */
@@ -89,4 +150,5 @@ export function closeStatusBus() {
     _storageHandler = null;
   }
   _listeners.clear();
+  _stopPolling();
 }

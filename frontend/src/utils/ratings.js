@@ -11,6 +11,19 @@ export const RATING_OPTIONS = Object.freeze(Object.keys(RATING_VALUES));
 
 export const ratingToNumber = (rating) => RATING_VALUES[rating] ?? null;
 
+// ── 合格线（教师口径，2026-08 确认）────────────────────────
+// 1-3 年级 ≥ 2.5（B+）；4-6 年级及以上 ≥ 3.0（A-）。按学生自己的年级判断。
+export const PASS_LINES = Object.freeze({
+  lower: 2.5,
+  upper: 3.0,
+});
+
+export const passLineForGrade = (grade) =>
+  grade >= 1 && grade <= 3 ? PASS_LINES.lower : PASS_LINES.upper;
+
+export const isPassing = (grade, value) =>
+  value !== null && value !== undefined && value >= passLineForGrade(grade);
+
 // 企业加分项：命中“有自己 / 有新意”可提升一级评级（A → A+）
 export const BONUS_FLAGS = Object.freeze(['有自己', '有新意']);
 
@@ -24,13 +37,17 @@ export const applyBonusUpgrade = (rating, bonusFlags) => {
 // 综合评级档位（与全站展示口径一致：优秀/良好/待提升/薄弱）
 export const BAND_ORDER = Object.freeze(['优秀', '良好', '待提升', '薄弱']);
 
-export const bandFromAverage = (avg) => {
+export const bandFromAverage = (avg, passLine = PASS_LINES.lower) => {
   if (avg >= 3.5) return '优秀';
-  if (avg >= 2.5) return '良好';
+  if (avg >= passLine) return '良好';
   if (avg >= 1.5) return '待提升';
   if (avg > 0) return '薄弱';
   return '未评';
 };
+
+/** 按学生年级合格线取综合评级档位。 */
+export const bandForGrade = (avg, grade) =>
+  bandFromAverage(avg, passLineForGrade(grade));
 
 // 企业加分项：命中可让综合评级提升一档（良好→优秀 / 待提升→良好 / 薄弱→待提升）
 export const upgradeBand = (band, bonusFlags) => {

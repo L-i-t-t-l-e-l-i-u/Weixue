@@ -30,6 +30,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from database import (
+    CompanionTurn,
     DebateTopic,
     FeishuBinding,
     SessionLocal,
@@ -238,6 +239,17 @@ async def minute_status(
     stored = False
     if resp and not resp.raw_text:
         resp.raw_text = transcript
+        # 与 import_text/import_audio 一致：首轮发言也要进对话轮次，
+        # 否则评估/时间线/学生端轮询都会丢掉第一轮。
+        if not any(t.role == "student" for t in (resp.companion_turns or [])):
+            db.add(
+                CompanionTurn(
+                    response_id=resp.id,
+                    role="student",
+                    content=transcript,
+                    turn_type="",
+                )
+            )
         db.commit()
         stored = True
 

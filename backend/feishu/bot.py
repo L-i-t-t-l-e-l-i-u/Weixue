@@ -180,6 +180,64 @@ class BotService:
         }
 
     @staticmethod
+    def build_prep_plan_card(
+        *,
+        title: str,
+        content: str,
+        course_id: int,
+        change_url: str = "",
+    ) -> dict:
+        """Build a Feishu interactive card (schema 2.0) for the lesson-prep plan.
+
+        Shows the teacher's saved plan (order + weak dimensions + notes) with a
+        URL jump back to the web prep page and a "确认计划" callback button
+        (dispatched as ``prep_confirm`` by card_actions).
+        """
+        base = {"course_id": course_id}
+        if change_url:
+            change_button = {
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": "去网页调整",
+                },
+                "url": change_url,
+            }
+        else:
+            change_button = {
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": "去网页调整",
+                },
+                "value": {**base, "action": "prep_open"},
+            }
+        return {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": title},
+                "template": "indigo",
+            },
+            "body": {
+                "direction": "vertical",
+                "elements": [
+                    {"tag": "markdown", "content": content},
+                    {
+                        "tag": "button",
+                        "type": "primary",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "确认计划",
+                        },
+                        "value": {**base, "action": "prep_confirm"},
+                    },
+                    change_button,
+                ],
+            },
+        }
+
+    @staticmethod
     def handle_event(config: FeishuConfig, body: dict) -> dict:
         """Validate a Feishu event callback payload.
 

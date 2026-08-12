@@ -20,6 +20,7 @@ import json
 from .bitable import (
     BitableService,
     TABLE_COURSES,
+    TABLE_PREP_PLANS,
     TABLE_RESPONSES,
     TABLE_STUDENTS,
     TABLE_TOPICS,
@@ -43,6 +44,7 @@ async def _run(apply: bool) -> int:
                 "topics": {k: v for k, v in TABLE_TOPICS.items()},
                 "students": {k: v for k, v in TABLE_STUDENTS.items()},
                 "responses": {k: v for k, v in TABLE_RESPONSES.items()},
+                "prep_plans": {k: v for k, v in TABLE_PREP_PLANS.items()},
             },
             "hint": "Run with --apply to create missing fields/options",
         }, ensure_ascii=False, indent=2))

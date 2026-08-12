@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import useStore from './stores/gradingStore';
 import GradingPage from './pages/GradingPage';
 import ManagementPage from './pages/ManagementPage';
@@ -7,6 +7,7 @@ import PrepPage from './pages/PrepPage';
 import ReportPage from './pages/ReportPage';
 import LibraryPage from './pages/LibraryPage';
 import LiveCockpit from './pages/LiveCockpit';
+import { getMode, setMode, resolveMode, subscribeModeChange } from './config/mode';
 
 const TABS = [
   { key: 'manage',   label: '管理',     icon: '🗂️' },
@@ -28,14 +29,39 @@ const TAB_DESC = {
 const TIER_LABEL = { basic: '低年级', developing: '中年级', advancing: '高年级' };
 
 export default function App() {
-  const { course, courses, currentTab, setTab, currentMode, setMode, loading, assessing, assessmentProgress, loadAllCourses, selectCourse, createCourse, runAssessment, resetAll } = useStore();
+  const { course, courses, currentTab, setTab, currentMode, setMode: setAppMode, loading, assessing, assessmentProgress, loadAllCourses, selectCourse, createCourse, runAssessment, resetForModeSwitch } = useStore();
+  const [runtimeMode, setRuntimeMode] = useState(getMode());
+  const [resolvedMode, setResolvedMode] = useState(null);
+  const [modeError, setModeError] = useState('');
 
   useEffect(() => {
     // Deep link support (e.g. from Feishu card jump buttons): /?tab=comments
     const t = new URLSearchParams(window.location.search).get('tab');
     if (t && TABS.some((x) => x.key === t)) setTab(t);
     loadAllCourses();
+    // 演示/真实模式：自动探测一次，并监听切换（切换后重载数据）。
+    resolveMode().then(setResolvedMode);
+    return subscribeModeChange(async (next) => {
+      setRuntimeMode(next);
+      setModeError('');
+      try {
+        await resetForModeSwitch();
+      } catch (e) {
+        console.error('模式切换失败:', e);
+        setModeError(
+          next === 'real'
+            ? '无法连接后端（/api 不可达），请确认服务已启动；页面仍显示当前数据。'
+            : '加载演示数据失败。',
+        );
+      }
+    });
   }, []);
+
+  const displayMode = runtimeMode === 'auto' ? (resolvedMode || 'auto') : runtimeMode;
+  const switchMode = (next) => {
+    if (next === displayMode) return;
+    setMode(next);
+  };
 
   if (loading && !course) {
     return (
@@ -73,10 +99,32 @@ export default function App() {
       <header className="bg-white border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-6 py-3 flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <span className="bg-indigo-100 text-indigo-700 text-xs font-bold px-2 py-1 rounded">DEMO</span>
+            <span className={`text-xs font-bold px-2 py-1 rounded ${
+              displayMode === 'real' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'
+            }`}>
+              {displayMode === 'real' ? '真实模式' : displayMode === 'demo' ? '演示模式' : '自动探测…'}
+            </span>
             <h1 className="text-lg font-bold text-slate-900 m-0">维学思辨星 · 少儿思辨能力评估系统</h1>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex bg-slate-100 rounded-lg p-0.5 mr-1">
+              <button
+                onClick={() => switchMode('demo')}
+                title="使用内置演示数据，无需后端"
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer
+                  ${displayMode === 'demo' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
+              >
+                演示
+              </button>
+              <button
+                onClick={() => switchMode('real')}
+                title="连接 FastAPI 后端"
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer
+                  ${displayMode === 'real' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
+              >
+                真实
+              </button>
+            </div>
             <select
               value={course.id}
               onChange={e => selectCourse(parseInt(e.target.value, 10))}
@@ -96,19 +144,25 @@ export default function App() {
         </div>
       </header>
 
+      {modeError && (
+        <div className="bg-red-50 border-b border-red-200">
+          <div className="max-w-7xl mx-auto px-6 py-2 text-xs text-red-600">{modeError}</div>
+        </div>
+      )}
+
       {/* ── Tabs ───────────────────────────────────────── */}
       <nav className="bg-white border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-6 flex gap-1 items-center">
           <div className="flex bg-slate-100 rounded-lg p-0.5 mr-2">
             <button
-              onClick={() => setMode('live')}
+              onClick={() => setAppMode('live')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer
                 ${currentMode === 'live' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
             >
               🏫 课堂
             </button>
             <button
-              onClick={() => setMode('workbench')}
+              onClick={() => setAppMode('workbench')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer
                 ${currentMode === 'workbench' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
             >
@@ -130,12 +184,6 @@ export default function App() {
           <div className="flex-1" />
           {currentMode === 'workbench' && currentTab === 'grading' && !assessing && (
             <div className="flex gap-2 my-1.5">
-              <button
-                onClick={() => { if (window.confirm('确定要重置所有评估数据吗？所有评分、批注、标签将恢复到初始状态。')) resetAll(); }}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-red-200 text-red-600 bg-white hover:bg-red-50 transition-colors"
-              >
-                ↺ 重置
-              </button>
               <button
                 onClick={runAssessment}
                 className="px-4 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"

@@ -287,6 +287,50 @@ class TagMerge(BaseModel):
     merge_ids: list[int]
 
 
+# ── PrepPlan (备课辅助讲评计划) ──────────────────────────────
+
+class PrepPlanOut(BaseModel):
+    course_id: int
+    lesson_plan: list[int] = Field(default_factory=list)
+    notes: dict[str, str] = Field(default_factory=dict)
+    confirmed: bool = False
+    summary: dict = Field(default_factory=dict)
+    updated_at: Optional[datetime] = None
+    class Config:
+        from_attributes = True
+
+
+class PrepPlanUpdate(BaseModel):
+    lesson_plan: list[int] = Field(default_factory=list)
+    notes: dict[str, str] = Field(default_factory=dict)
+    confirmed: bool = False
+
+
+class PrepPlanPushOut(BaseModel):
+    ok: bool
+    status: str = ""
+    message: str = ""
+
+
+class PrepInsightsOut(BaseModel):
+    """Deterministic per-course prep insights (no LLM, always available)."""
+    course_id: int
+    participation: dict = Field(default_factory=dict)
+    tier_summary: dict = Field(default_factory=dict)
+    highlights: list[dict] = Field(default_factory=list)
+    topic_highlights: list[dict] = Field(default_factory=list)
+    problem_patterns: list[dict] = Field(default_factory=list)
+    top_tags: list[dict] = Field(default_factory=list)
+
+
+class PrepSummaryUpdate(BaseModel):
+    """Teacher edits to an AI summary (topic_id=None ⇒ class-level)."""
+    topic_id: Optional[int] = None
+    overview: Optional[str] = None
+    problems: Optional[str] = None
+    suggestions: Optional[str] = None
+
+
 # ── ASR settings ───────────────────────────────────────────
 
 class ASRProviderInfo(BaseModel):
@@ -305,3 +349,18 @@ class ASRSettingOut(BaseModel):
 
 class ASRSettingUpdate(BaseModel):
     provider: str
+
+
+class SystemModeOut(BaseModel):
+    """Backend capability matrix used by the frontend 演示/真实 switch."""
+    mode: str = "backend"
+    demo_course_present: bool = False
+    asr_provider: str = "mock"
+    asr_ready: bool = False
+    llm_configured: bool = False
+    feishu_ready: bool = False
+    bitable_ready: bool = False
+
+
+class SystemModeAction(BaseModel):
+    action: str   # enter_demo | enter_real

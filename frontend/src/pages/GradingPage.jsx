@@ -1,7 +1,11 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import useStore from '../stores/gradingStore';
 import * as api from '../api/client';
-import { averageRating, RATING_OPTIONS, bandFromAverage, upgradeBand, collectBonusFlags } from '../utils/ratings';
+import {
+  averageRating, RATING_OPTIONS, bandForGrade, passLineForGrade,
+  upgradeBand, collectBonusFlags,
+} from '../utils/ratings';
+import FeishuSyncCard from '../components/FeishuSyncCard';
 
 /* ── Rating color helper ─────────────────────────────────── */
 const ratingColor = (rating) => {
@@ -41,102 +45,14 @@ const BAND_CLS = {
   未评: 'bg-slate-100 text-slate-500',
 };
 
-const overallBadge = (avg, bonusFlags) => {
-  const band = upgradeBand(bandFromAverage(avg), bonusFlags);
+const overallBadge = (avg, bonusFlags, grade) => {
+  const band = upgradeBand(bandForGrade(avg, grade), bonusFlags);
   return {
     label: band,
     cls: BAND_CLS[band] || BAND_CLS.未评,
     upgraded: Array.isArray(bonusFlags) && bonusFlags.length > 0 && band !== '未评',
   };
 };
-
-/* ── Feishu Bitable sync status (collapsible) ────────────────────────── */
-const TABLE_LABELS = {
-  courses: '班级', topics: '辩题', students: '学生', responses: '作答',
-};
-
-function FeishuSyncCard({ courseId }) {
-  const [status, setStatus] = useState(null);
-  const [error, setError] = useState('');
-  const [open, setOpen] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState('');
-
-  const refresh = useCallback(async () => {
-    setError('');
-    try {
-      setStatus(await api.getFeishuBitableStatus());
-    } catch (e) {
-      setError(e?.response?.data?.detail || '无法获取飞书同步状态');
-    }
-  }, []);
-
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const runSync = async () => {
-    setSyncing(true);
-    setSyncResult('');
-    try {
-      const r = await api.syncFeishuBitable(courseId);
-      const synced = r.synced ?? r.records?.length ?? 0;
-      setSyncResult(`同步完成：新增/更新 ${synced} 条，跳过 ${r.skipped ?? 0} 条`);
-      refresh();
-    } catch (e) {
-      setSyncResult(`同步失败：${e?.response?.data?.detail || e?.message || '未知错误'}`);
-    }
-    setSyncing(false);
-  };
-
-  const ready = status?.mode === 'ready';
-  const bindings = status?.bindings || {};
-  return (
-    <div className={`rounded-xl border ${ready ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/50'}`}>
-      <div className="px-4 py-2.5 flex items-center gap-2.5">
-        <span className={`w-2 h-2 rounded-full ${ready ? 'bg-emerald-500' : 'bg-amber-400'}`} />
-        <span className="text-xs font-medium text-slate-700">飞书多维表格</span>
-        <span className={`text-[11px] px-2 py-0.5 rounded-full ${ready ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-          {ready ? '已配置' : status ? '待联调' : '加载中'}
-        </span>
-        {status?.message && <span className="text-[11px] text-slate-400">{status.message}</span>}
-        <div className="ml-auto flex items-center gap-1.5">
-          <button
-            onClick={runSync}
-            disabled={syncing || !ready}
-            className={`text-[11px] px-2.5 py-1 rounded-md border font-medium transition-colors cursor-pointer
-              ${ready ? 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50' : 'border-slate-200 bg-white text-slate-400 cursor-not-allowed'}`}
-          >
-            {syncing ? '同步中...' : '同步'}
-          </button>
-          <button
-            onClick={() => setOpen(!open)}
-            className="text-[11px] text-slate-400 hover:text-slate-600 cursor-pointer px-1"
-          >
-            {open ? '收起 ▴' : '详情 ▾'}
-          </button>
-        </div>
-      </div>
-      {error && <div className="px-4 pb-2 text-[11px] text-red-500">{error}</div>}
-      {syncResult && <div className="px-4 pb-2 text-[11px] text-slate-600">{syncResult}</div>}
-      {open && (
-        <div className="px-4 pb-3 pt-1 border-t border-slate-100">
-          {status?.mode === 'deferred' && !status?.message && (
-            <div className="text-[11px] text-amber-700 mb-2">
-              尚未配置多维表格（FEISHU_BITABLE_APP_TOKEN / FEISHU_BITABLE_TABLE_IDS），
-              可用 <code>python -m feishu.schema --apply</code> 引导建表。
-            </div>
-          )}
-          <div className="flex gap-4 flex-wrap">
-            {Object.entries(TABLE_LABELS).map(([key, label]) => (
-              <div key={key} className="text-[11px] text-slate-500">
-                {label}表：<b className="text-slate-700">{bindings[key] ?? 0}</b> 条已绑定
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function GradingPage() {
   const { students, topics, responses, currentStudentIdx, setStudentIdx, submitReview, courseId, tags, refreshTags } = useStore();
@@ -180,7 +96,7 @@ export default function GradingPage() {
     if (scores) { totalAvg += averageRating(scores); topicCount++; }
   });
   const studentAvg = topicCount > 0 ? totalAvg / topicCount : 0;
-  const badge = overallBadge(studentAvg, collectBonusFlags(resps));
+  const badge = overallBadge(studentAvg, collectBonusFlags(resps), student.grade);
 
   // Only show topics the student actually answered
   const studentTopics = topics.filter(t => {
@@ -205,7 +121,7 @@ export default function GradingPage() {
             if (sc) { avg += averageRating(sc); cnt++; }
           });
           const stAvg = cnt > 0 ? avg / cnt : 0;
-          const stBadge = overallBadge(stAvg, collectBonusFlags(ss));
+          const stBadge = overallBadge(stAvg, collectBonusFlags(ss), st.grade);
           const active = i === currentStudentIdx;
           return (
             <div
@@ -241,11 +157,25 @@ export default function GradingPage() {
             <div className="text-xs text-slate-400 mt-0.5">
               {student.grade}年级 · {studentTopics.length}个辩题
               {student.cognitive_tier && <span className="ml-2 text-indigo-500">{({basic:'基础层',developing:'发展层',advancing:'进阶层'})[student.cognitive_tier]}</span>}
+              <span className="ml-2 text-emerald-600">合格线 ≥{passLineForGrade(student.grade).toFixed(1)}（{student.grade <= 3 ? '1-3年级' : '4-6年级'}）</span>
             </div>
           </div>
           <div className="text-right">
-            <span className={`text-sm font-semibold px-3 py-1 rounded-lg ${badge.cls}`}>{badge.label}</span>
-            {badge.upgraded && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">加分项↑</span>}
+            <div className="flex items-center gap-1.5 justify-end">
+              <span className={`text-sm font-semibold px-3 py-1 rounded-lg ${badge.cls}`}>{badge.label}</span>
+              {badge.upgraded && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">加分项↑</span>}
+            </div>
+            {studentAvg > 0 && (
+              <div className={`mt-1.5 inline-block text-[11px] font-medium rounded-full px-2.5 py-0.5 ${
+                studentAvg >= passLineForGrade(student.grade)
+                  ? 'bg-green-100 text-green-700'
+                  : 'bg-red-100 text-red-700'
+              }`}>
+                {studentAvg >= passLineForGrade(student.grade)
+                  ? '✅ 达标'
+                  : `⚠️ 未达标（合格线 ${passLineForGrade(student.grade).toFixed(1)}）`}
+              </div>
+            )}
           </div>
         </div>
 
@@ -300,8 +230,9 @@ export default function GradingPage() {
           const resp = respMap[t.id];
           const scores = resp ? (resp.teacher_dimension_scores || resp.ai_dimension_scores) : null;
           const tAvg = averageRating(scores);
-          const tBadge = overallBadge(tAvg, resp?.ai_bonus_flags || []);
-          const baseBand = bandFromAverage(tAvg);
+          const tPassLine = passLineForGrade(student.grade);
+          const tBadge = overallBadge(tAvg, resp?.ai_bonus_flags || [], student.grade);
+          const baseBand = bandForGrade(tAvg, student.grade);
           const bonus = resp?.ai_bonus_flags || [];
           const isExpanded = expandedTopic === t.id;
           const aiNote = resp?.ai_note || '';
@@ -312,7 +243,7 @@ export default function GradingPage() {
 
           return (
             <div key={t.id} className={`bg-white rounded-xl border overflow-hidden transition-all
-              ${tAvg >= 3.5 ? 'border-green-200' : tAvg >= 2.5 ? 'border-emerald-200' : tAvg >= 1.5 ? 'border-yellow-200' : 'border-red-200'}`}>
+              ${tAvg >= 3.5 ? 'border-green-200' : tAvg >= tPassLine ? 'border-emerald-200' : tAvg >= 1.5 ? 'border-yellow-200' : 'border-red-200'}`}>
 
               {/* Collapsed header */}
               <div
@@ -323,6 +254,13 @@ export default function GradingPage() {
                   {tBadge.label}
                 </div>
                 {tBadge.upgraded && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">加分项↑</span>}
+                {tAvg > 0 && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                    tAvg >= tPassLine ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                  }`}>
+                    {tAvg >= tPassLine ? '达标' : '未达标'}
+                  </span>
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-slate-800">辩题{t.order}</span>
@@ -441,7 +379,8 @@ export default function GradingPage() {
                       <div className="text-xs font-medium text-slate-500 mb-1.5">AI 分析</div>
                       <div className={`rounded-lg p-3 text-sm min-h-[60px] border leading-relaxed
                         ${tAvg >= 3.5 ? 'bg-green-50 border-green-200 text-green-800'
-                          : tAvg >= 2 ? 'bg-amber-50 border-amber-200 text-amber-900'
+                          : tAvg >= tPassLine ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                          : tAvg >= 1.5 ? 'bg-amber-50 border-amber-200 text-amber-900'
                           : 'bg-red-50 border-red-200 text-red-900'}`}>
                         {aiNote || '评估完成，请查看各维度评分。'}
                       </div>

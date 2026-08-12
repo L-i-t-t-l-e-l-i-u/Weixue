@@ -40,6 +40,7 @@ TABLE_NAMES = {
     "topics": "辩题",
     "students": "学生",
     "responses": "评估记录",
+    "prep_plans": "讲评计划",
 }
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -13,7 +13,7 @@ from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
-from database import StudentResponse
+from database import PrepPlan, StudentResponse
 
 from .client import FeishuConfig
 from .reviews import apply_teacher_review
@@ -42,6 +42,8 @@ def dispatch_card_action(
         }
     if action_name == "send_comment":
         return _card_send_comment(value)
+    if action_name == "prep_confirm":
+        return _card_prep_confirm(db, value)
     return {"toast": {"type": "warning", "content": "未知操作，请升级应用"}}
 
 
@@ -98,3 +100,19 @@ def _card_send_comment(value: dict) -> dict:
             "content": "待联调：学生暂未绑定飞书账号，评语已保存在系统中",
         }
     }
+
+
+def _card_prep_confirm(db: Session, value: dict) -> dict:
+    """Confirm the lesson-prep plan from a card button (teacher decision gate)."""
+    try:
+        cid = int(value.get("course_id") or 0)
+    except (TypeError, ValueError):
+        return {"toast": {"type": "error", "content": "卡片参数无效"}}
+    plan = db.query(PrepPlan).filter(PrepPlan.course_id == cid).first()
+    if not plan:
+        return {"toast": {"type": "error", "content": "讲评计划不存在，请先在网页端生成"}}
+    if not plan.lesson_plan:
+        return {"toast": {"type": "warning", "content": "讲评计划还没有选辩题"}}
+    plan.confirmed = True
+    db.commit()
+    return {"toast": {"type": "success", "content": "讲评计划已确认"}}
