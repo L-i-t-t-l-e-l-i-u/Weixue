@@ -63,7 +63,6 @@ def main() -> None:
             resp.raw_text = r.get("raw_text") or ""
             resp.cleaned_text = r.get("cleaned_text") or ""
             resp.source = r.get("source") or "manual"
-            resp.feishu_minute_id = r.get("feishu_minute_id") or ""
             resp.ai_dimension_scores = _parse_json_field(r.get("ai_dimension_scores"))
             resp.ai_confidence = r.get("ai_confidence") or "uncertain"
             resp.ai_reasoning = _parse_json_field(r.get("ai_reasoning")) or {}

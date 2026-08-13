@@ -94,6 +94,17 @@ export const averageRating = (scores) => {
     : 0;
 };
 
+// ── 课堂即时评级（绿/黄/红三档，教师第一印象）────────────────
+// 与工作台五维度完整评分互补、互不冲突：课堂上老师一键留下的轻量判断，
+// 存于 StudentResponse.teacher_rating（good / guide / echo）。
+export const QUICK_RATING_META = Object.freeze({
+  good: { label: '表达完整', short: '👍', cls: 'bg-green-100 text-green-700 border-green-200' },
+  guide: { label: '需引导', short: '➕', cls: 'bg-amber-100 text-amber-700 border-amber-200' },
+  echo: { label: '复述/未表达', short: '⚠️', cls: 'bg-red-100 text-red-700 border-red-200' },
+});
+
+export const quickRatingMeta = (rating) => QUICK_RATING_META[rating] || null;
+
 // Compatibility aliases for components introduced in the collaborator branch.
 export const RATING_TO_NUM = RATING_VALUES;
 export const avgRating = averageRating;

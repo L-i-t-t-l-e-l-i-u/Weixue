@@ -10,9 +10,8 @@ Providers (ASR_PROVIDER env):
 - dashscope: DashScope (百炼) paraformer via the `dashscope` SDK;
              requires `pip install dashscope` and a Model Studio API key
 
-The Feishu Minutes path is parked (permission issue), so this module is the
-ASR-agnostic replacement: frontend uploads audio -> this transcribes ->
-raw_text enters the existing two-layer evaluation pipeline.
+Frontend uploads audio -> this transcribes -> raw_text enters the existing
+two-layer evaluation pipeline.
 """
 
 import asyncio

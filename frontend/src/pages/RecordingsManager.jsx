@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import useStore from '../stores/gradingStore';
 import * as api from '../api/client';
 
-const SOURCE_LABEL = { audio: '🎙️ 音频', asr: '📝 妙记', manual: '✍️ 手动' };
+const SOURCE_LABEL = { audio: '🎙️ 音频', asr: '📝 转写', manual: '✍️ 手动' };
 
 const ALLOWED_EXT = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.amr', '.wma', '.flac', '.webm', '.mp4'];
 const MAX_UPLOAD_MB = 20;          // generous hard cap for all providers

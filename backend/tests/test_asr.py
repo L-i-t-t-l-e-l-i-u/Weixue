@@ -16,6 +16,12 @@ import unittest
 from asr import ASRClient, ASRError, MOCK_TRANSCRIPT
 
 
+# backend/.env may be loaded into os.environ by other test modules
+# (feishu.client's load_dotenv); keep the provider-default assertions
+# deterministic instead of inheriting the live ASR_MODEL.
+os.environ["ASR_MODEL"] = ""
+
+
 class ASRClientUnitTests(unittest.TestCase):
     def test_provider_resolution_and_default_models(self):
         self.assertEqual(ASRClient(provider="mock").provider, "mock")
@@ -52,6 +58,7 @@ os.environ["ASR_PROVIDER"] = "broken"
 # Prevent backend/.env from leaking real keys into the readiness assertions.
 os.environ["LLM_API_KEY"] = ""
 os.environ["ASR_API_KEY"] = ""
+os.environ["ASR_MODEL"] = ""
 sys.path.insert(0, os.getcwd())
 
 import main

@@ -329,6 +329,8 @@ with TestClient(main.app) as client:
 
     ins = client.get(f"/api/courses/{cid}/prep/insights").json()
     out["participation"] = ins["participation"]
+    out["quick_rating_counts"] = ins["quick_rating_counts"]
+    out["per_topic_quick"] = ins["participation"]["per_topic"][0].get("quick_ratings")
     out["highlight_count"] = len(ins["highlights"])
     out["topic_highlight_count"] = len(ins["topic_highlights"])
     out["problem_count"] = len(ins["problem_patterns"])
@@ -339,6 +341,10 @@ with TestClient(main.app) as client:
             k: ins["highlights"][0][k]
             for k in ("student_name", "topic_title", "avg", "bonus_flags")
         }
+
+    report = client.get(f"/api/courses/{cid}/report").json()
+    out["report_quick"] = report["quick_rating_counts"]
+    out["report_student_quick"] = report["student_stats"][0]["quick_ratings"]
 
     summary = client.post(f"/api/courses/{cid}/prep/summary").json()
     out["summary"] = summary
@@ -393,6 +399,10 @@ print(json.dumps(out, ensure_ascii=False))
         self.assertIn("class_avg", out["participation"])
         self.assertGreaterEqual(out["highlight_count"], 1)
         self.assertGreaterEqual(out["topic_highlight_count"], 1)
+        self.assertEqual(sum(out["quick_rating_counts"].values()), 9)
+        self.assertEqual(set(out["per_topic_quick"].keys()), {"good", "guide", "echo"})
+        self.assertEqual(sum(out["report_quick"].values()), 9)
+        self.assertEqual(set(out["report_student_quick"].keys()), {"good", "guide", "echo"})
         self.assertIn("tier_keys", out)
         self.assertIsInstance(out["top_tags"], list)
         self.assertEqual(out["summary"]["generated_by"], "template")

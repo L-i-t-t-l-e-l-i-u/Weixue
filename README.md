@@ -90,7 +90,7 @@ Weixue/
 │   │   ├── evaluator.py       # 双层流水线（Layer1 文本清洗 + Layer2 维度评估）
 │   │   ├── rubric_loader.py   # Rubric 模板加载 + prompt 组装 + 校准注入
 │   │   └── llm.py             # LLM 客户端适配器
-│   ├── feishu/                # 飞书集成（妙记转写 / 多维表格 / 机器人）
+│   ├── feishu/                # 飞书集成（多维表格 / 机器人）
 │   ├── export_demo_data.py    # 导出演示数据到前端 demo 模式
 │   ├── restore_demo_state.py  # 从 demo-data.json 快照恢复教师批改状态
 │   └── data/                  # SQLite 数据库
@@ -152,25 +152,16 @@ npm run dev                   # http://localhost:5173（自动代理到后端）
 | `ASR_MODEL` | 转写模型名称 | 按提供商自动匹配 |
 | `ASR_API_KEY` | 转写 API Key（留空复用 `LLM_API_KEY`） | — |
 
-### 飞书接入（妙记 + 多维表格）
+### 飞书接入（多维表格 + 机器人）
 
-复制 `.env.example` 为 `.env`，填入企业自建应用凭证和一条可选的已完成妙记样本：
+复制 `.env.example` 为 `.env`，填入企业自建应用凭证：
 
 ```env
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=xxx
-FEISHU_MINUTE_TOKEN=obcnxxx
 ```
 
-运行只读诊断：
-
-```bash
-cd backend
-python -m feishu.check
-python -m feishu.check --minute-token obcnxxx
-```
-
-启动后端后，`GET /api/health` 检查数据库、飞书鉴权和可选妙记样本；`GET /api/feishu/minutes/{minute_token}/transcript` 读取已完成的转写。
+启动后端后，`GET /api/health` 检查数据库、飞书鉴权与多维表格状态。
 
 **多维表格（已联调，2026-08-10）**：评估完成 / 教师保存后，本地数据单向同步到多维表格（班级 / 辩题 / 学生 / 评估记录四张表），本地库是唯一事实源，表格只作展示与审阅面。应用凭证就位后一键引导：
 

@@ -536,6 +536,7 @@ TEACHER_REVIEWS = {
         'teacher_tags': ['能自发考虑反方观点', '情感投入丰富', '有简单逻辑连接'],
         'ai_bonus_flags': ['有新意'],
         'teacher_note': '',
+        'teacher_rating': 'good',
         'teacher_confidence_override': None,
     },
     2: {
@@ -543,6 +544,7 @@ TEACHER_REVIEWS = {
         'teacher_dimension_scores': {'position': 'A-', 'material': 'B+', 'structure': 'B+', 'language': 'B+', 'perspective': 'B+'},
         'teacher_tags': ['有解释意图', '选材意识萌芽', '口语化表达', '语言待精确'],
         'teacher_note': '',
+        'teacher_rating': 'guide',
         'teacher_confidence_override': None,
     },
     3: {
@@ -550,6 +552,7 @@ TEACHER_REVIEWS = {
         'teacher_dimension_scores': {'position': 'A', 'material': 'B', 'structure': 'A-', 'language': 'A', 'perspective': 'B+'},
         'teacher_tags': ['观点表达清晰', '选材意识待发展'],
         'teacher_note': '',
+        'teacher_rating': 'good',
         'teacher_confidence_override': None,
     },
     4: {
@@ -558,6 +561,7 @@ TEACHER_REVIEWS = {
         'teacher_tags': ['结构清晰', '选材具体', '论证有深度'],
         'ai_bonus_flags': ['有自己'],
         'teacher_note': '',
+        'teacher_rating': 'good',
         'teacher_confidence_override': None,
     },
     5: {
@@ -565,6 +569,7 @@ TEACHER_REVIEWS = {
         'teacher_dimension_scores': {'position': 'A-', 'material': 'A-', 'structure': 'A-', 'language': 'A', 'perspective': 'B+'},
         'teacher_tags': ['自我质疑', '事实与观点', '选材具体', '结构清晰'],
         'teacher_note': '选材尚可',
+        'teacher_rating': 'guide',
         'teacher_confidence_override': None,
     },
     6: {
@@ -573,6 +578,7 @@ TEACHER_REVIEWS = {
         'teacher_tags': ['结构清晰', '视角多元分析', '紧扣主题'],
         'ai_bonus_flags': ['有新意'],
         'teacher_note': '紧扣主题',
+        'teacher_rating': 'good',
         'teacher_confidence_override': None,
     },
     7: {
@@ -580,6 +586,7 @@ TEACHER_REVIEWS = {
         'teacher_dimension_scores': {'position': 'A', 'material': 'A', 'structure': 'B+', 'language': 'A-', 'perspective': 'A'},
         'teacher_tags': ['多角度分析', '结构清晰', '结构待加强'],
         'teacher_note': '',
+        'teacher_rating': 'guide',
         'teacher_confidence_override': None,
     },
     8: {
@@ -587,6 +594,7 @@ TEACHER_REVIEWS = {
         'teacher_dimension_scores': {'position': 'A', 'material': 'A', 'structure': 'A-', 'language': 'A-', 'perspective': 'A'},
         'teacher_tags': ['结构清晰', '概念分析', '反驳意识待加强', '动物园'],
         'teacher_note': '很好的逻辑结构能力',
+        'teacher_rating': 'good',
         'teacher_confidence_override': None,
     },
     9: {
@@ -594,6 +602,7 @@ TEACHER_REVIEWS = {
         'teacher_dimension_scores': {'position': 'B+', 'material': 'B', 'structure': 'B', 'language': 'B+', 'perspective': 'B'},
         'teacher_tags': ['单一视角', '需加强逻辑连接', '个人经验主导', '缺乏反驳', '论证意识初现'],
         'teacher_note': '',
+        'teacher_rating': 'echo',
         'teacher_confidence_override': None,
     },
 }
@@ -695,6 +704,7 @@ def seed(force=False):
                 resp.ai_bonus_flags = review.get('ai_bonus_flags', [])
                 resp.teacher_note = review['teacher_note']
                 resp.teacher_confidence_override = review['teacher_confidence_override']
+                resp.teacher_rating = review.get('teacher_rating', '')
                 resp.teacher_reviewed = True
 
     # Seed Dimension Tags

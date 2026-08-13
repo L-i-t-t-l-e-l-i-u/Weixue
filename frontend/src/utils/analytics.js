@@ -108,7 +108,9 @@ export function computePrepInsights(students, topics, responses, courseId) {
     per_topic: topics.map(t => {
       const list = respByTopic[t.id] || [];
       let passing = 0;
+      const topicQuick = { good: 0, guide: 0, echo: 0 };
       list.forEach(r => {
+        if (r.teacher_rating in topicQuick) topicQuick[r.teacher_rating] += 1;
         const scores = normalizeScores(r.teacher_dimension_scores || r.ai_dimension_scores);
         const confidence = r.teacher_confidence_override || r.ai_confidence;
         if (confidence === 'uncertain' && !r.teacher_dimension_scores) return;
@@ -122,6 +124,7 @@ export function computePrepInsights(students, topics, responses, courseId) {
         responses: list.length,
         reviewed: list.filter(r => r.teacher_reviewed).length,
         passing,
+        quick_ratings: topicQuick,
       };
     }),
   };
@@ -257,6 +260,12 @@ export function computePrepInsights(students, topics, responses, courseId) {
     .slice(0, 8)
     .map(([tag, count]) => ({ tag, count }));
 
+  // 课堂即时评级（教师第一印象，绿/黄/红三档）——与五维度评分互补。
+  const quickRatingCounts = { good: 0, guide: 0, echo: 0 };
+  inCourse.forEach(r => {
+    if (r.teacher_rating in quickRatingCounts) quickRatingCounts[r.teacher_rating] += 1;
+  });
+
   return {
     course_id: courseId,
     participation,
@@ -265,6 +274,7 @@ export function computePrepInsights(students, topics, responses, courseId) {
     topic_highlights: topicHighlights,
     problem_patterns: problemPatterns,
     top_tags: topTags,
+    quick_rating_counts: quickRatingCounts,
   };
 }
 
@@ -320,7 +330,9 @@ export function computeClassReport(students, topics, responses, tags, courseId) 
   const studentStats = students.map(st => {
     const vals = [];
     let uncertain = 0;
+    const quick = { good: 0, guide: 0, echo: 0 };
     inCourse.filter(r => r.student_id === st.id).forEach(r => {
+      if (r.teacher_rating in quick) quick[r.teacher_rating] += 1;
       const scores = r.teacher_dimension_scores || r.ai_dimension_scores;
       const confidence = r.teacher_confidence_override || r.ai_confidence;
       if (confidence === 'uncertain' && !r.teacher_dimension_scores) {
@@ -344,12 +356,17 @@ export function computeClassReport(students, topics, responses, tags, courseId) 
       passing: avg > 0 && avg >= passLine,
       uncertain,
       bonus_flags: collectBonusFlags(inCourse.filter(r => r.student_id === st.id)),
+      quick_ratings: quick,
     };
   });
 
   const avgs = studentStats.map(s => s.avg_score).filter(a => a > 0);
   const assessed = studentStats.filter(s => s.avg_score > 0);
   const passCount = assessed.filter(s => s.passing).length;
+  const quickRatingCounts = { good: 0, guide: 0, echo: 0 };
+  studentStats.forEach(s => {
+    Object.entries(s.quick_ratings || {}).forEach(([k, v]) => { quickRatingCounts[k] += v; });
+  });
   return {
     class_avg: avgs.length ? Math.round((avgs.reduce((a, b) => a + b, 0) / avgs.length) * 100) / 100 : 0,
     student_count: students.length,
@@ -363,6 +380,7 @@ export function computeClassReport(students, topics, responses, tags, courseId) 
     ),
     topic_stats: topicStats,
     student_stats: studentStats,
+    quick_rating_counts: quickRatingCounts,
     top_tags: (tags || [])
       .filter(tag => tag.course_id === courseId && tag.use_count > 0)
       .sort((a, b) => b.use_count - a.use_count)

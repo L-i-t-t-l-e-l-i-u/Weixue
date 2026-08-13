@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import useStore from '../stores/gradingStore';
-import { applyBonusUpgrade, bandForGrade, passLineForGrade, upgradeBand } from '../utils/ratings';
+import { bandForGrade, passLineForGrade, ratingToNumber, upgradeBand, quickRatingMeta } from '../utils/ratings';
 import * as api from '../api/client';
 
 const DIM_LABELS = {
@@ -42,6 +42,13 @@ const ratingColor = (v) => {
   if (v >= 2.5) return '#10b981';
   if (v >= 1.5) return '#eab308';
   return v > 0 ? '#f97316' : '#94a3b8';
+};
+
+const BAND_TEXT_CLS = {
+  优秀: 'text-green-600',
+  良好: 'text-emerald-600',
+  待提升: 'text-yellow-600',
+  薄弱: 'text-red-600',
 };
 
 /** Pure-SVG radar chart for up to 9 dimension averages (0-4 scale). */
@@ -117,7 +124,8 @@ function ParentReportView({ report, loading, onBack }) {
 
   const dims = Object.entries(report.dimensions || {});
   const bonus = report.bonus_flags || [];
-  const finalRating = applyBonusUpgrade(report.rating, bonus);
+  const finalRating = upgradeBand(report.rating, bonus);
+  const quick = quickRatingMeta(report.quick_rating);
   return (
     <div className="flex flex-col gap-5">
       <div className="bg-white rounded-xl p-5 border border-slate-200 flex items-center justify-between">
@@ -176,9 +184,17 @@ function ParentReportView({ report, loading, onBack }) {
           </div>
           <div className="bg-white rounded-xl p-5 border border-slate-200">
             <h3 className="text-sm font-semibold text-slate-800 mb-2">综合评价</h3>
-            <div className="text-lg font-bold" style={{ color: ratingColor(finalRating ? ratingToNumber(finalRating) : 0) }}>
+            <div className={`text-lg font-bold ${BAND_TEXT_CLS[finalRating] || 'text-slate-400'}`}>
               {finalRating || '待评定'}
             </div>
+            {quick && (
+              <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                <span className={`text-[11px] px-2 py-0.5 rounded-full border font-medium ${quick.cls}`}>
+                  {quick.short} 课堂即时评级：{quick.label}
+                </span>
+                <span className="text-[10px] text-slate-400">教师课堂第一印象，与五维度评分互补</span>
+              </div>
+            )}
             {bonus.length > 0 && (
               <div className="mt-1.5 text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
                 加分项：{bonus.join('、')} → 综合评级已升级
@@ -216,6 +232,7 @@ export default function ReportPage() {
       (responses[sid] || []).forEach(r => {
         parts.push(
           `${r.id}:${r.teacher_reviewed ? 1 : 0}:`
+          + `${r.teacher_rating || ''}:`
           + `${JSON.stringify(r.teacher_dimension_scores || null)}:`
           + `${(r.teacher_tags || []).join(',')}`,
         );
@@ -301,6 +318,40 @@ export default function ReportPage() {
         合格线：1-3年级 ≥2.5（B+），4-6年级及以上 ≥3.0（A-），按学生各自年级判断达标。
       </div>
 
+      {/* 课堂即时评级（教师第一印象）——与五维度完整评分互补 */}
+      {(() => {
+        const qc = report.quick_rating_counts || {};
+        const total = (qc.good || 0) + (qc.guide || 0) + (qc.echo || 0);
+        if (!total) return null;
+        return (
+          <div className="bg-white rounded-xl p-5 border border-slate-200">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-lg">🎯</span>
+              <h3 className="text-sm font-semibold text-slate-800">课堂即时评级（教师第一印象）</h3>
+              <span className="text-[11px] bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded">共 {total} 次</span>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                ['good', '表达完整', '👍'],
+                ['guide', '需引导', '➕'],
+                ['echo', '复述/未表达', '⚠️'],
+              ].map(([key, label, icon]) => {
+                const q = quickRatingMeta(key);
+                return (
+                  <div key={key} className={`rounded-lg border px-3 py-2 ${q.cls}`}>
+                    <div className="text-[11px]">{icon} {label}</div>
+                    <div className="text-xl font-bold mt-0.5">{qc[key] || 0} 次</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-[11px] text-slate-400 mt-2">
+              课堂中老师一键留下的轻量判断（绿=表达完整 / 黄=需引导 / 红=复述或未表达），与工作台五维度完整评分互补、不冲突。
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Class-level radar */}
       <div className="bg-white rounded-xl p-5 border border-slate-200">
         <h3 className="text-sm font-semibold text-slate-800 mb-2">班级思辨能力雷达</h3>
@@ -358,6 +409,14 @@ export default function ReportPage() {
                       </span>
                     )}
                     {upgraded && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">加分项↑</span>}
+                    {s.quick_ratings && Object.entries(s.quick_ratings).filter(([, n]) => n > 0).map(([k, n]) => {
+                      const q = quickRatingMeta(k);
+                      return q ? (
+                        <span key={k} className={`ml-1 text-[9px] px-1 py-0.5 rounded ${q.cls}`}>
+                          {q.short}{n}
+                        </span>
+                      ) : null;
+                    })}
                   </div>
                   <span className={`text-sm font-bold ${sl.cls}`}>{s.avg_score > 0 ? s.avg_score.toFixed(1) : '-'}</span>
                 </div>

@@ -113,8 +113,7 @@ class StudentResponse(Base):
     # Raw and cleaned text
     raw_text = Column(Text, default="")       # original speech/writing (with noise)
     cleaned_text = Column(Text, default="")   # after cleaning stage
-    source = Column(String(20), default="manual")  # manual / asr (Feishu Minutes)
-    feishu_minute_id = Column(String(100), default="")  # bound Feishu minute token
+    source = Column(String(20), default="manual")  # manual / audio / student_device / teacher / asr
     audio_recording_id = Column(Integer, ForeignKey("audio_recordings.id"), nullable=True)
     segment_start_ms = Column(Integer, nullable=True)
     segment_end_ms = Column(Integer, nullable=True)
@@ -360,8 +359,6 @@ def _migrate():
         cols = {row[1] for row in conn.execute(text("PRAGMA table_info(student_responses)"))}
         if "source" not in cols:
             conn.execute(text("ALTER TABLE student_responses ADD COLUMN source VARCHAR(20) DEFAULT 'manual'"))
-        if "feishu_minute_id" not in cols:
-            conn.execute(text("ALTER TABLE student_responses ADD COLUMN feishu_minute_id VARCHAR(100) DEFAULT ''"))
         if "audio_recording_id" not in cols:
             conn.execute(text("ALTER TABLE student_responses ADD COLUMN audio_recording_id INTEGER REFERENCES audio_recordings(id)"))
         if "segment_start_ms" not in cols:

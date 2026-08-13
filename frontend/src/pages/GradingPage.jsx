@@ -3,7 +3,7 @@ import useStore from '../stores/gradingStore';
 import * as api from '../api/client';
 import {
   averageRating, RATING_OPTIONS, bandForGrade, passLineForGrade,
-  upgradeBand, collectBonusFlags,
+  upgradeBand, collectBonusFlags, quickRatingMeta,
 } from '../utils/ratings';
 import FeishuSyncCard from '../components/FeishuSyncCard';
 
@@ -270,11 +270,22 @@ export default function GradingPage() {
                       <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">音频</span>
                     )}
                     {resp?.source === 'asr' && (
-                      <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">妙记</span>
+                      <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">转写</span>
                     )}
                     {isReviewed && (
                       <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-medium">已评</span>
                     )}
+                    {resp?.teacher_rating && (() => {
+                      const q = quickRatingMeta(resp.teacher_rating);
+                      return q ? (
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${q.cls}`}
+                          title="课堂即时评级（教师第一印象，与五维度评分互补）"
+                        >
+                          {q.short} {q.label}
+                        </span>
+                      ) : null;
+                    })()}
                   </div>
                   {/* Dimension pills */}
                   {scores && (
@@ -621,7 +632,7 @@ function TeacherPanel({ topic, response, suggestedTags, teacherTags, allTags, re
   );
 }
 
-/* ── Audio Uploader (ASR pipeline, independent of Feishu Minutes) ─────── */
+/* ── Audio Uploader (ASR pipeline) ─────── */
 function AudioUploader({ courseId, student, topic }) {
   const { loadCourse } = useStore();
   const inputRef = useRef(null);

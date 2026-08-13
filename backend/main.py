@@ -42,7 +42,7 @@ from feishu.routes import close_client as close_feishu_router_client
 from feishu.routes import router as feishu_router
 from asr import ASRClient, ASRError
 from grading.ratings import rating_to_value, pass_line_for_grade, is_passing
-from feishu import FeishuAPIError, FeishuClient, FeishuConfigurationError
+from feishu import FeishuClient
 from feishu.bot import BotService
 from feishu.reviews import apply_teacher_review, sync_tags_to_library
 from feishu.sync import BitableSyncer, bitable_status
@@ -51,16 +51,35 @@ app = FastAPI(title="思辨星 · 少儿思辨能力认知自适应评估系统"
 
 # 企业加分项：命中“有自己 / 有新意”可提升一级评级（A → A+）
 _BONUS_VALUES = {"有自己", "有新意"}
-_RATING_ORDER = ["B-", "B", "B+", "A-", "A", "A+"]
 
 
-def _upgrade_rating(rating: str, bonus_flags: list) -> str:
-    """Upgrade an overall rating by one step when enterprise bonus flags hit."""
-    if not rating or rating not in _RATING_ORDER or rating == "A+":
-        return rating
-    if not bonus_flags or not any(b in _BONUS_VALUES for b in bonus_flags):
-        return rating
-    return _RATING_ORDER[_RATING_ORDER.index(rating) + 1]
+_QUICK_RATING_LABELS = {
+    "good": "表达完整",
+    "guide": "需引导",
+    "echo": "复述/未表达",
+}
+
+
+def _upgrade_band(band: str, bonus_flags: list) -> str:
+    """Upgrade a 综合评级 band by one step when enterprise bonus flags hit."""
+    if band in {"良好", "待提升", "薄弱"} and any(
+        b in _BONUS_VALUES for b in (bonus_flags or [])
+    ):
+        return {"良好": "优秀", "待提升": "良好", "薄弱": "待提升"}[band]
+    return band
+
+
+def _band_for_avg(avg: float, pass_line: float) -> str:
+    """综合评级档位（与前端 bandFromAverage 口径一致）。"""
+    if avg >= 3.5:
+        return "优秀"
+    if avg >= pass_line:
+        return "良好"
+    if avg >= 1.5:
+        return "待提升"
+    if avg > 0:
+        return "薄弱"
+    return ""
 
 app.add_middleware(
     CORSMiddleware,
@@ -294,10 +313,9 @@ async def on_shutdown():
 
 @app.get("/api/health")
 async def health_check():
-    minute_token = os.getenv("FEISHU_MINUTE_TOKEN", "").strip()
-    feishu = await feishu_client.health_check(minute_token)
+    feishu = await feishu_client.health_check()
     return {
-        "status": "ok" if feishu["status"] in {"auth_ok", "ready"} else "degraded",
+        "status": "ok" if feishu["status"] == "auth_ok" else "degraded",
         "database": "ready",
         "feishu": feishu,
         "bitable": bitable_status(feishu_client.config),
@@ -395,24 +413,6 @@ def set_system_mode(body: SystemModeAction, db: Session = Depends(get_db)):
             "message": "演示课程已清除" if result.get("purged") else "无演示课程可清除。",
         }
     raise HTTPException(400, "invalid action (enter_demo|enter_real)")
-
-
-@app.get("/api/feishu/minutes/{minute_token}/transcript")
-async def get_feishu_minute_transcript(minute_token: str):
-    try:
-        transcript = await feishu_client.export_minute_transcript(minute_token)
-        return {
-            "minute_token": minute_token,
-            "transcript": transcript,
-            "characters": len(transcript),
-        }
-    except FeishuConfigurationError as exc:
-        raise HTTPException(503, str(exc)) from exc
-    except FeishuAPIError as exc:
-        raise HTTPException(
-            exc.status_code or 502,
-            {"message": str(exc), "code": exc.code, "log_id": exc.log_id},
-        ) from exc
 
 
 # ════════════════════════════════════════════════════════════
@@ -1147,7 +1147,7 @@ async def assess_one_response(rid: int, background_tasks: BackgroundTasks, db: S
 
 
 # ════════════════════════════════════════════════════════════
-# Audio import (ASR pipeline — independent of Feishu Minutes)
+# Audio import (ASR pipeline)
 # ════════════════════════════════════════════════════════════
 
 
@@ -2143,7 +2143,10 @@ def _prep_insights(cid: int, db: Session) -> dict:
     for t in topics:
         topic_resps = resp_by_topic.get(t.id, [])
         passing = 0
+        topic_quick = {"good": 0, "guide": 0, "echo": 0}
         for r in topic_resps:
+            if r.teacher_rating in topic_quick:
+                topic_quick[r.teacher_rating] += 1
             scores = r.teacher_dimension_scores or r.ai_dimension_scores
             conf = r.teacher_confidence_override or r.ai_confidence
             if conf == "uncertain" and not r.teacher_dimension_scores:
@@ -2161,6 +2164,7 @@ def _prep_insights(cid: int, db: Session) -> dict:
             "responses": len(topic_resps),
             "reviewed": sum(1 for r in topic_resps if r.teacher_reviewed),
             "passing": passing,
+            "quick_ratings": topic_quick,
         })
 
     # Tier summary
@@ -2306,6 +2310,12 @@ def _prep_insights(cid: int, db: Session) -> dict:
         for t, c in sorted(tag_counts.items(), key=lambda x: -x[1])[:8]
     ]
 
+    # 课堂即时评级（教师第一印象，绿/黄/红三档）——与五维度评分互补。
+    quick_rating_counts = {"good": 0, "guide": 0, "echo": 0}
+    for r in responses:
+        if r.teacher_rating in quick_rating_counts:
+            quick_rating_counts[r.teacher_rating] += 1
+
     return {
         "course_id": cid,
         "participation": participation,
@@ -2314,6 +2324,7 @@ def _prep_insights(cid: int, db: Session) -> dict:
         "topic_highlights": topic_highlights,
         "problem_patterns": problem_patterns,
         "top_tags": top_tags,
+        "quick_rating_counts": quick_rating_counts,
     }
 
 
@@ -2337,6 +2348,15 @@ def _build_summary_digest(course, insights: dict) -> str:
         f"参评：{p['students_answered']}/{p['students_total']}人，"
         f"共{p['responses_total']}份作答。"
     )
+    quick = insights.get("quick_rating_counts") or {}
+    if quick and any(quick.values()):
+        lines.append(
+            "课堂即时评级（教师第一印象）：" + "、".join(
+                f"{_QUICK_RATING_LABELS[key]}{quick.get(key, 0)}人"
+                for key in ("good", "guide", "echo")
+                if quick.get(key)
+            )
+        )
     tier = insights["tier_summary"]
     if tier:
         parts = []
@@ -2387,6 +2407,21 @@ def _template_prep_summary(insights: dict) -> dict:
         + (f"各认知梯段表现：{tier_text}。" if tier_text else "")
         + "建议在讲评课上先肯定整体亮点，再针对薄弱维度做引导。"
     )
+    quick = insights.get("quick_rating_counts") or {}
+    if quick and any(quick.values()):
+        overview = (
+            f"全班 {p['students_answered']} 名学生共提交 {p['responses_total']} 份作答，"
+            "整体参与度良好。"
+            "课堂即时评级（教师第一印象）："
+            + "、".join(
+                f"{_QUICK_RATING_LABELS[key]}{quick.get(key, 0)}人"
+                for key in ("good", "guide", "echo")
+                if quick.get(key)
+            )
+            + "。"
+            + (f"各认知梯段表现：{tier_text}。" if tier_text else "")
+            + "建议在讲评课上先肯定整体亮点，再针对薄弱维度做引导。"
+        )
     weak = insights["problem_patterns"]
     if weak:
         problems = "\n".join(
@@ -2780,10 +2815,12 @@ def class_report(cid: int, db: Session = Depends(get_db)):
     # Per-student
     student_stats = []
     class_dims = {}
+    class_quick = {"good": 0, "guide": 0, "echo": 0}
     for st in students:
         all_vals = []
         unc = 0
         bonus_flags = []
+        quick_counts = {"good": 0, "guide": 0, "echo": 0}
         for topic in topics:
             resp = db.query(StudentResponse).filter(
                 StudentResponse.student_id == st.id,
@@ -2791,6 +2828,9 @@ def class_report(cid: int, db: Session = Depends(get_db)):
             ).first()
             if not resp:
                 continue
+            if resp.teacher_rating in quick_counts:
+                quick_counts[resp.teacher_rating] += 1
+                class_quick[resp.teacher_rating] += 1
             conf = resp.teacher_confidence_override or resp.ai_confidence
             scores = resp.teacher_dimension_scores or resp.ai_dimension_scores
             bonus_flags.extend(resp.ai_bonus_flags or [])
@@ -2813,6 +2853,7 @@ def class_report(cid: int, db: Session = Depends(get_db)):
             "passing": avg_score >= pass_line,
             "uncertain": unc,
             "bonus_flags": sorted(set(bonus_flags)),
+            "quick_ratings": quick_counts,
         })
 
     # Top tags
@@ -2840,6 +2881,7 @@ def class_report(cid: int, db: Session = Depends(get_db)):
         "topic_stats": topic_stats,
         "student_stats": student_stats,
         "top_tags": top_tags,
+        "quick_rating_counts": class_quick,
     }
 
 
@@ -2895,6 +2937,7 @@ def student_report(sid: int, db: Session = Depends(get_db)):
     avg_score = sum(score_values) / len(score_values) if score_values else 0
     pass_line = pass_line_for_grade(student.grade)
 
+    band = _upgrade_band(_band_for_avg(avg_score, pass_line), response.ai_bonus_flags or [])
     return {
         "student_id": sid,
         "name": student.name,
@@ -2906,10 +2949,15 @@ def student_report(sid: int, db: Session = Depends(get_db)):
         "topic_title": response.topic.title if response.topic else "",
         "dimensions": dimensions,
         "teacher_comment": response.teacher_note or "",
-        "rating": _upgrade_rating(response.teacher_rating or "", response.ai_bonus_flags or []),
+        "rating": band,
+        "quick_rating": response.teacher_rating or "",
         "bonus_flags": response.ai_bonus_flags or [],
         "reviewed": response.teacher_reviewed,
-        "next_steps": ["下节课重点关注" + (response.teacher_rating or "本次表达") + "对应的引导方向"],
+        "next_steps": [
+            "下节课重点关注"
+            + (_QUICK_RATING_LABELS.get(response.teacher_rating or "", "本次表达"))
+            + "对应的引导方向"
+        ],
     }
 
 

@@ -49,39 +49,6 @@ class FeishuClientTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await http.aclose()
 
-    async def test_transcript_export_uses_bearer_token(self):
-        async def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path.endswith("/tenant_access_token/internal/"):
-                return httpx.Response(
-                    200,
-                    json={
-                        "code": 0,
-                        "msg": "success",
-                        "tenant_access_token": "t-test-token",
-                        "expire": 7200,
-                    },
-                )
-            self.assertEqual(request.headers["Authorization"], "Bearer t-test-token")
-            self.assertEqual(
-                request.url.path,
-                "/minutes/v1/minutes/obcn12345678901234567890/transcript",
-            )
-            return httpx.Response(200, content="说话人1：测试文本".encode("utf-8"))
-
-        transport = httpx.MockTransport(handler)
-        http = httpx.AsyncClient(transport=transport, base_url="https://example.test")
-        client = FeishuClient(
-            "cli_test",
-            "secret",
-            base_url="https://example.test",
-            http_client=http,
-        )
-        try:
-            transcript = await client.export_minute_transcript("obcn12345678901234567890")
-            self.assertIn("测试文本", transcript)
-        finally:
-            await http.aclose()
-
     async def test_unconfigured_health_is_explicit(self):
         client = FeishuClient(http_client=httpx.AsyncClient())
         try:

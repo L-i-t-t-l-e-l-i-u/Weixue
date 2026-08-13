@@ -551,10 +551,23 @@ export const generatePrepSummary = (cid) => {
   const tierText = Object.entries(tier)
     .map(([k, v]) => `${tierLabels[k] || k} ${v.students}人、均分${v.avg_score}`)
     .join('；');
-  const overview =
+  let overview =
     `全班 ${p.students_answered} 名学生共提交 ${p.responses_total} 份作答，整体参与度良好。`
     + (tierText ? `各认知梯段表现：${tierText}。` : '')
     + '建议在讲评课上先肯定整体亮点，再针对薄弱维度做引导。';
+  const quick = insights.quick_rating_counts || {};
+  if ((quick.good || 0) + (quick.guide || 0) + (quick.echo || 0) > 0) {
+    const quickParts = [
+      quick.good ? `表达完整${quick.good}人` : '',
+      quick.guide ? `需引导${quick.guide}人` : '',
+      quick.echo ? `复述/未表达${quick.echo}人` : '',
+    ].filter(Boolean).join('、');
+    const base = `全班 ${p.students_answered} 名学生共提交 ${p.responses_total} 份作答，整体参与度良好。`
+      + (quickParts ? `课堂即时评级（教师第一印象）：${quickParts}。` : '')
+      + (tierText ? `各认知梯段表现：${tierText}。` : '')
+      + '建议在讲评课上先肯定整体亮点，再针对薄弱维度做引导。';
+    overview = base;
+  }
   const weak = insights.problem_patterns;
   const problems = weak.length
     ? weak.slice(0, 4).map(w =>

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import useStore from '../stores/gradingStore';
 import * as api from '../api/client';
 import FeishuSyncCard from '../components/FeishuSyncCard';
+import { quickRatingMeta } from '../utils/ratings';
 
 const DIM_LABELS = {
   position: '立意（观点鲜明）', material: '选材（言之有物）',
@@ -652,6 +653,29 @@ export default function PrepPage() {
                 </div>
               ))}
             </div>
+            {(() => {
+              const qc = insights.quick_rating_counts || {};
+              const total = (qc.good || 0) + (qc.guide || 0) + (qc.echo || 0);
+              if (!total) return null;
+              return (
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  <span className="text-[11px] text-slate-400">课堂即时评级（教师第一印象）：</span>
+                  {[
+                    ['good', '表达完整', '👍'],
+                    ['guide', '需引导', '➕'],
+                    ['echo', '复述/未表达', '⚠️'],
+                  ].map(([key, label, icon]) => {
+                    const q = quickRatingMeta(key);
+                    return (
+                      <span key={key} className={`text-[11px] px-2 py-0.5 rounded-full border font-medium ${q.cls}`}>
+                        {icon} {label} {qc[key] || 0}人
+                      </span>
+                    );
+                  })}
+                  <span className="text-[10px] text-slate-300">与五维度完整评分互补、不冲突</span>
+                </div>
+              );
+            })()}
             {Object.keys(insights.tier_summary || {}).length > 0 && (
               <div className="flex gap-1.5 flex-wrap mb-2">
                 {Object.entries(insights.tier_summary).map(([tier, t]) => (
@@ -798,6 +822,16 @@ export default function PrepPage() {
                       {perTopic?.passing > 0 && (
                         <span className="ml-2 text-emerald-600 font-medium">达标 {perTopic.passing} 份</span>
                       )}
+                      {perTopic?.quick_ratings && Object.entries(perTopic.quick_ratings)
+                        .filter(([, n]) => n > 0)
+                        .map(([k, n]) => {
+                          const q = quickRatingMeta(k);
+                          return q ? (
+                            <span key={k} className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded ${q.cls}`}>
+                              {q.short}{q.label} {n}
+                            </span>
+                          ) : null;
+                        })}
                     </div>
                     <div className="flex gap-1.5 flex-wrap mb-2">
                       {Object.entries(row.avg_dimension_scores || {}).map(([dim, val]) => (

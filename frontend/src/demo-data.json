@@ -119,7 +119,6 @@
       "raw_text": "嗯……我想让它……飞走！因为老鹰就是应该飞的嘛。老鹰飞起来可帅了！我看过老鹰飞的那个视频，就是……翅膀特别大。然后然后……如果在动物园里的话，老鹰就飞不了了，只能走来走去，好可怜的。所以我觉得应该放它走。但是……但是它万一又受伤了怎末办呢……嗯……那……那还是放它走吧，因为飞比较重要。",
       "cleaned_text": "",
       "source": "manual",
-      "feishu_minute_id": "",
       "audio_recording_id": null,
       "segment_start_ms": null,
       "segment_end_ms": null,
@@ -137,7 +136,7 @@
       "teacher_tags": "[\"能自发考虑反方观点\", \"情感投入丰富\", \"有简单逻辑连接\"]",
       "teacher_note": "",
       "teacher_reviewed": true,
-      "teacher_rating": "",
+      "teacher_rating": "good",
       "processing_status": "not_started"
     },
     {
@@ -147,7 +146,6 @@
       "raw_text": "我选留在动物园。因为动物园有人喂它吃东西，不用自己找吃的。而且外面有大灰狼……不对，老鹰不怕大灰狼。嗯，但是外面可能没有吃的，它受伤了就是找不到吃的才受伤的嘛。动物园有医生，受伤了可以看医生。而且我在动物园看到过老鹰！很酷的！别的小朋友也能看到。",
       "cleaned_text": "",
       "source": "manual",
-      "feishu_minute_id": "",
       "audio_recording_id": null,
       "segment_start_ms": null,
       "segment_end_ms": null,
@@ -163,7 +161,7 @@
       "teacher_tags": "[\"有解释意图\", \"选材意识萌芽\", \"口语化表达\", \"语言待精确\"]",
       "teacher_note": "",
       "teacher_reviewed": true,
-      "teacher_rating": "",
+      "teacher_rating": "guide",
       "processing_status": "not_started"
     },
     {
@@ -173,7 +171,6 @@
       "raw_text": "我想放它走……但是不是直接放走！就是……先让它飞一下试试，看它还会不会自己抓东西吃。如果会抓了就放走，如果不会就再养一段时间。就像我学骑自行车一样，先有辅助轮，后来拆掉了就会骑了。老鹰也应该先练习一下再飞走。",
       "cleaned_text": "",
       "source": "manual",
-      "feishu_minute_id": "",
       "audio_recording_id": null,
       "segment_start_ms": null,
       "segment_end_ms": null,
@@ -189,7 +186,7 @@
       "teacher_tags": "[\"观点表达清晰\", \"选材意识待发展\"]",
       "teacher_note": "",
       "teacher_reviewed": true,
-      "teacher_rating": "",
+      "teacher_rating": "good",
       "processing_status": "not_started"
     },
     {
@@ -199,7 +196,6 @@
       "raw_text": "我觉得这是一个观点，不是事实。因为“主要是”这三个字就是在说哪个更重要，每个人觉得重要的东西不一样。比如动物园的园长可能觉得保护最重要，但卖门票的人可能觉得让人来参观赚钱最重要。不过动物园确实做了保护工作，比如大熊猫的繁殖项目，这个是事实。所以这句话里面有一部分事实，但整体上是一个观点。",
       "cleaned_text": "",
       "source": "manual",
-      "feishu_minute_id": "",
       "audio_recording_id": null,
       "segment_start_ms": null,
       "segment_end_ms": null,
@@ -217,7 +213,7 @@
       "teacher_tags": "[\"结构清晰\", \"选材具体\", \"论证有深度\"]",
       "teacher_note": "",
       "teacher_reviewed": true,
-      "teacher_rating": "",
+      "teacher_rating": "good",
       "processing_status": "not_started"
     },
     {
@@ -227,7 +223,6 @@
       "raw_text": "嗯……我觉得是事实吧。因为动物园里确实有很多快要灭绝的动物。比如大熊猫，就是因为动物园在保护它们才没有灭绝的。所以动物园的存在就是为了保护它们。不过……有些动物园里面也有不是濒危的动物，比如猴子和老虎什么的。那这些可能不是为了保护的。",
       "cleaned_text": "",
       "source": "manual",
-      "feishu_minute_id": "",
       "audio_recording_id": null,
       "segment_start_ms": null,
       "segment_end_ms": null,
@@ -243,7 +238,7 @@
       "teacher_tags": "[\"自我质疑\", \"事实与观点\", \"选材具体\", \"结构清晰\"]",
       "teacher_note": "选材尚可",
       "teacher_reviewed": true,
-      "teacher_rating": "",
+      "teacher_rating": "guide",
       "processing_status": "not_started"
     },
     {
@@ -253,7 +248,6 @@
       "raw_text": "这是一个观点。因为“主要”这个词代表了一种价值排序。事实上动物园同时做好几件事：保护濒危动物、供人参观、做科学研究、还有教育。至于哪个是“主要的”，取决于你从谁的角度看。从动物保护者的角度，保护是主要的。从商业角度，赚钱是主要的。从教育的角度，让孩子认识动物是主要的。所以不能简单地说“主要是什么”，得先问“对谁来说主要”。",
       "cleaned_text": "",
       "source": "manual",
-      "feishu_minute_id": "",
       "audio_recording_id": null,
       "segment_start_ms": null,
       "segment_end_ms": null,
@@ -271,7 +265,7 @@
       "teacher_tags": "[\"结构清晰\", \"视角多元分析\", \"紧扣主题\"]",
       "teacher_note": "紧扣主题",
       "teacher_reviewed": true,
-      "teacher_rating": "",
+      "teacher_rating": "good",
       "processing_status": "not_started"
     },
     {
@@ -281,7 +275,6 @@
       "raw_text": "这个因果关系不完全成立。\n\n“去过动物园”和“更爱护动物”之间可能存在相关性，但不一定是因果关系。\n\n首先，有可能是反向因果：本来就爱护动物的家庭更愿意带孩子去动物园，而不是去动物园导致了爱护动物。这就好比说买书多的家庭孩子成绩好，不是因为买书导致成绩好，而是重视教育的家庭既买书又抓学习。\n\n其次，即使有因果关系，也要看动物园的质量。如果动物园只是把动物关在笼子里，孩子看到的可能是“动物就是被关着给人看的”，这反而可能削弱对动物的尊重。\n\n不过我也承认，对于城里从没见过真实动物的孩子来说，亲眼看到大象比看书上的图片确实更有冲击力。所以我认为关键在于参观的方式和质量，而不是“去过”这个行为本身。",
       "cleaned_text": "",
       "source": "manual",
-      "feishu_minute_id": "",
       "audio_recording_id": null,
       "segment_start_ms": null,
       "segment_end_ms": null,
@@ -297,7 +290,7 @@
       "teacher_tags": "[\"多角度分析\", \"结构清晰\", \"结构待加强\"]",
       "teacher_note": "",
       "teacher_reviewed": true,
-      "teacher_rating": "",
+      "teacher_rating": "guide",
       "processing_status": "not_started"
     },
     {
@@ -307,7 +300,6 @@
       "raw_text": "我觉得不能一概而论。\n\n一方面，动物园如果设计得好，确实能成为动物保护教育的入口。比如有些动物园会讲解动物面临的威胁、栖息地破坏等问题，这种有教育深度的参观体验可能真的能培养孩子的保护意识。\n\n但另一方面，78%的家长“认为”有帮助，这个调查本身就可能有偏差——愿意花钱带孩子去动物园的家长，本身就更重视自然教育，他们的孩子“更爱护动物”可能是家庭教育导致的。\n\n而且“爱护动物”怎么定义呢？是看到流浪猫会心疼？还是愿意为保护动物捐款？还是日常生活中不吃野生动物？这个概念如果没定义清楚，那个78%的数据本身就不可靠。\n\n我的结论是：这个说法有一定的合理性，但把复杂的因果关系简化为“去过=更爱护”是不严谨的。更准确的说法应该是：“高质量的动物园教育体验，结合家庭引导，有助于培养孩子的动物保护意识。”",
       "cleaned_text": "",
       "source": "manual",
-      "feishu_minute_id": "",
       "audio_recording_id": null,
       "segment_start_ms": null,
       "segment_end_ms": null,
@@ -323,7 +315,7 @@
       "teacher_tags": "[\"结构清晰\", \"概念分析\", \"反驳意识待加强\", \"动物园\"]",
       "teacher_note": "很好的逻辑结构能力",
       "teacher_reviewed": true,
-      "teacher_rating": "",
+      "teacher_rating": "good",
       "processing_status": "not_started"
     },
     {
@@ -333,7 +325,6 @@
       "raw_text": "这个说法挺有道理的。因为你去动物园就能看到真实的动物，看到之后就会觉得动物很可爱，然后就会想要保护它们。就像你看到一只可爱的小猫，你就会想照顾它一样。而且很多动物园都有讲解员告诉你这些动物的故事，你知道了它们的生活习性之后就会更爱护它们。我觉得那些没去过动物园的小孩可能就不知道动物长什么样，所以就不会那么爱护动物。我小时候去过动物园之后就开始喜欢动物了，现在我家里养了两只猫，我都特别爱护它们。所以去过动物园确实能让人更爱护动物。",
       "cleaned_text": "",
       "source": "manual",
-      "feishu_minute_id": "",
       "audio_recording_id": null,
       "segment_start_ms": null,
       "segment_end_ms": null,
@@ -349,7 +340,7 @@
       "teacher_tags": "[\"单一视角\", \"需加强逻辑连接\", \"个人经验主导\", \"缺乏反驳\", \"论证意识初现\"]",
       "teacher_note": "",
       "teacher_reviewed": true,
-      "teacher_rating": "",
+      "teacher_rating": "echo",
       "processing_status": "not_started"
     }
   ],

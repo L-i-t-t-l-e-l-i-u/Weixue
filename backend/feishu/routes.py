@@ -1,11 +1,9 @@
-"""FastAPI routes exposing the Feishu integration (health, minutes import, events).
+"""FastAPI routes exposing the Feishu integration (health, bitable, events, cards).
 
 Endpoints:
 - GET  /api/feishu/health              - config status (no secrets)
 - GET  /api/feishu/bitable/status      - Bitable config + binding counts
 - POST /api/feishu/bitable/sync        - manual one-way sync of a course
-- POST /api/feishu/minutes/import      - accept audio, upload + create minute (M2)
-- GET  /api/feishu/minutes/{token}/status - poll transcript, store raw_text (M2)
 - POST /api/feishu/events              - event subscription callback (M4)
 - POST /api/feishu/card                - interactive card callback (M4)
 """
@@ -13,41 +11,26 @@ Endpoints:
 import hashlib
 import hmac
 import json
-import os
-from datetime import datetime
 from typing import Optional
 
 from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
-    File,
-    Form,
     HTTPException,
     Request,
-    UploadFile,
 )
 from sqlalchemy.orm import Session
 
 from database import (
-    CompanionTurn,
-    DebateTopic,
     FeishuBinding,
     SessionLocal,
-    Student,
-    StudentResponse,
     get_db,
 )
 
 from .bot import BotService
 from .card_actions import dispatch_card_action
-from .client import (
-    FeishuAPIError,
-    FeishuClient,
-    FeishuConfig,
-    FeishuConfigurationError,
-)
-from .minutes import MinutesService
+from .client import FeishuClient, FeishuConfig
 from .sync import (
     BitableSyncer,
     TABLE_KEYS,
@@ -56,11 +39,6 @@ from .sync import (
 )
 
 router = APIRouter(prefix="/api/feishu", tags=["feishu"])
-
-UPLOAD_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads"
-)
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 _feishu_config = FeishuConfig()
 _client: Optional[FeishuClient] = None
@@ -107,8 +85,7 @@ def _verify_event_signature(
 
 @router.get("/health")
 async def health():
-    minute_token = os.getenv("FEISHU_MINUTE_TOKEN", "").strip()
-    status = await get_client().health_check(minute_token)
+    status = await get_client().health_check()
     return {
         "status": status["status"],
         "feishu": _feishu_config.summary(),
@@ -146,119 +123,6 @@ async def bitable_sync(body: dict, db: Session = Depends(get_db)):
         raise HTTPException(400, "course_id is required")
     syncer = BitableSyncer(get_client(), _feishu_config)
     return await syncer.sync_course(db, course_id)
-
-
-@router.post("/minutes/import")
-async def import_minute(
-    course_id: int = Form(...),
-    student_id: int = Form(...),
-    topic_id: int = Form(...),
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-):
-    """Step 1 of the ASR flow: accept an audio file, upload to Feishu drive,
-    create a Minute, and bind it to the student's response row.
-
-    Step 2: poll GET /api/feishu/minutes/{minute_token}/status until the
-    transcript is ready (or subscribe to minutes.minute.generated_v1).
-    """
-    student = db.get(Student, student_id)
-    topic = db.get(DebateTopic, topic_id)
-    if not student or student.course_id != course_id:
-        raise HTTPException(400, "student not found in course")
-    if not topic or topic.course_id != course_id:
-        raise HTTPException(400, "topic not found in course")
-    if not _feishu_config.is_configured:
-        raise HTTPException(503, "FEISHU_APP_ID / FEISHU_APP_SECRET not configured")
-
-    original_name = os.path.basename(file.filename or "audio")
-    safe_name = (
-        f"{course_id}_{student_id}_{topic_id}_"
-        f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{original_name}"
-    )
-    dest = os.path.join(UPLOAD_DIR, safe_name)
-    with open(dest, "wb") as fh:
-        fh.write(await file.read())
-
-    minutes = MinutesService(get_client())
-    try:
-        file_token = await minutes.upload_media(dest)
-        minute = await minutes.create_minute(file_token)
-    except (FeishuAPIError, FeishuConfigurationError) as exc:
-        raise HTTPException(502, f"Feishu minutes import failed: {exc}")
-
-    resp = (
-        db.query(StudentResponse)
-        .filter(
-            StudentResponse.student_id == student_id,
-            StudentResponse.topic_id == topic_id,
-        )
-        .first()
-    )
-    if resp is None:
-        resp = StudentResponse(
-            student_id=student_id, topic_id=topic_id, raw_text="", source="asr"
-        )
-        db.add(resp)
-    resp.feishu_minute_id = minute["minute_token"]
-    resp.source = "asr"
-    db.commit()
-
-    return {
-        "minute_token": minute["minute_token"],
-        "minute_url": minute.get("minute_url", ""),
-        "status": "transcribing",
-    }
-
-
-@router.get("/minutes/{minute_token}/status")
-async def minute_status(
-    minute_token: str,
-    db: Session = Depends(get_db),
-):
-    """Step 2: poll until the Minute transcript is ready, then store the
-    transcript as raw_text on the bound StudentResponse."""
-    if not _feishu_config.is_configured:
-        raise HTTPException(503, "FEISHU_APP_ID / FEISHU_APP_SECRET not configured")
-
-    minutes = MinutesService(get_client())
-    try:
-        transcript = await minutes.get_transcript(minute_token)
-    except FeishuAPIError as exc:
-        # Minute may still be generating - report as transcribing.
-        return {"minute_token": minute_token, "status": "transcribing", "detail": str(exc)}
-
-    if not transcript:
-        return {"minute_token": minute_token, "status": "transcribing"}
-
-    resp = (
-        db.query(StudentResponse)
-        .filter(StudentResponse.feishu_minute_id == minute_token)
-        .first()
-    )
-    stored = False
-    if resp and not resp.raw_text:
-        resp.raw_text = transcript
-        # 与 import_text/import_audio 一致：首轮发言也要进对话轮次，
-        # 否则评估/时间线/学生端轮询都会丢掉第一轮。
-        if not any(t.role == "student" for t in (resp.companion_turns or [])):
-            db.add(
-                CompanionTurn(
-                    response_id=resp.id,
-                    role="student",
-                    content=transcript,
-                    turn_type="",
-                )
-            )
-        db.commit()
-        stored = True
-
-    return {
-        "minute_token": minute_token,
-        "status": "ready",
-        "transcript_preview": transcript[:200],
-        "stored": stored,
-    }
 
 
 @router.post("/events")

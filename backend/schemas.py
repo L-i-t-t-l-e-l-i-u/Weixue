@@ -109,7 +109,6 @@ class StudentResponseOut(BaseModel):
     raw_text: str = ""
     cleaned_text: str = ""
     source: str = "manual"
-    feishu_minute_id: str = ""
     audio_recording_id: Optional[int] = None
     segment_start_ms: Optional[int] = None
     segment_end_ms: Optional[int] = None
@@ -321,6 +320,7 @@ class PrepInsightsOut(BaseModel):
     topic_highlights: list[dict] = Field(default_factory=list)
     problem_patterns: list[dict] = Field(default_factory=list)
     top_tags: list[dict] = Field(default_factory=list)
+    quick_rating_counts: dict = Field(default_factory=dict)
 
 
 class PrepSummaryUpdate(BaseModel):

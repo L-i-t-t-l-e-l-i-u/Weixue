@@ -1,8 +1,4 @@
-"""Feishu OpenAPI client shared by Minutes, Bitable, and bot services.
-
-The client keeps the collaborator's generic JSON request layer while retaining
-the verified raw-text Minutes export path and explicit health contract.
-"""
+"""Feishu OpenAPI client shared by Bitable and bot services."""
 
 from __future__ import annotations
 
@@ -31,7 +27,7 @@ class FeishuConfigurationError(RuntimeError):
 
 
 class FeishuAPIError(RuntimeError):
-    """Normalized error for both generic OpenAPI and raw Minutes requests."""
+    """Normalized error for generic OpenAPI requests."""
 
     def __init__(
         self,
@@ -100,7 +96,7 @@ class FeishuConfig:
 
 
 class FeishuClient:
-    """Async Feishu client with token caching and raw transcript support."""
+    """Async Feishu client with token caching."""
 
     def __init__(
         self,
@@ -239,70 +235,20 @@ class FeishuClient:
             return payload.get("data", payload)
         raise FeishuAPIError(-1, "request failed after retries", path)
 
-    async def export_minute_transcript(
-        self,
-        minute_token: str,
-        *,
-        file_format: str = "txt",
-        need_speaker: bool = True,
-        need_timestamp: bool = True,
-        access_token: Optional[str] = None,
-    ) -> str:
-        """Download a completed Minutes transcript as UTF-8 text."""
-        minute_token = minute_token.strip()
-        if not minute_token:
-            raise ValueError("minute_token is required")
-        if file_format not in {"txt", "srt"}:
-            raise ValueError("file_format must be 'txt' or 'srt'")
-        token = access_token or await self.get_tenant_access_token()
-        response = await self._http.get(
-            f"{self.base_url}/minutes/v1/minutes/{minute_token}/transcript",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json; charset=utf-8",
-            },
-            params={
-                "file_format": file_format,
-                "need_speaker": str(need_speaker).lower(),
-                "need_timestamp": str(need_timestamp).lower(),
-            },
-        )
-        if response.status_code >= 400:
-            self._raise_api_error(
-                response,
-                self._json_payload(response),
-                "Failed to export Feishu Minutes transcript",
-            )
-        return response.content.decode("utf-8-sig", errors="replace")
-
-    async def health_check(self, minute_token: str = "") -> dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         if not self.configured:
             return {
                 "status": "not_configured",
                 "auth": False,
-                "minute": "skipped",
                 "message": "Set FEISHU_APP_ID and FEISHU_APP_SECRET",
             }
         try:
             await self.get_tenant_access_token()
-            result: dict[str, Any] = {
-                "status": "auth_ok",
-                "auth": True,
-                "minute": "skipped",
-            }
-            if minute_token:
-                transcript = await self.export_minute_transcript(minute_token)
-                result.update(
-                    status="ready",
-                    minute="ready",
-                    transcript_chars=len(transcript),
-                )
-            return result
+            return {"status": "auth_ok", "auth": True}
         except (FeishuConfigurationError, FeishuAPIError, httpx.HTTPError) as exc:
             result = {
                 "status": "error",
                 "auth": bool(self._tenant_token),
-                "minute": "error" if minute_token else "skipped",
                 "message": str(exc),
             }
             if isinstance(exc, FeishuAPIError):

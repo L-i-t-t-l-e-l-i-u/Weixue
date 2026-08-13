@@ -1,4 +1,4 @@
-"""Feishu integration helpers for Minutes, Bitable, and bot workflows."""
+"""Feishu integration helpers for Bitable and bot workflows."""
 
 from .client import (
     FeishuAPIError,
