@@ -22,7 +22,6 @@ from database import (
     Student,
     StudentResponse,
     SessionLocal,
-    init_db,
 )
 from feishu.client import FeishuClient, FeishuConfig
 
@@ -46,6 +45,14 @@ from feishu.sync import (
     build_topic_record,
     teacher_fields_hash,
 )
+
+
+def _reset_db():
+    """Drop and recreate all tables so rows/bindings never leak across classes."""
+    from database import Base, engine
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
 
 def _configured_client(calls: dict) -> tuple[FeishuClient, httpx.AsyncClient]:
@@ -190,7 +197,7 @@ class RecordBuilderTests(unittest.TestCase):
 class BitableSyncTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        init_db()
+        _reset_db()
 
     # NOTE: the temp DB dir is shared by the whole suite's engine; cleanup is
     # registered at module level via atexit, never in a tearDownClass.
@@ -343,7 +350,7 @@ class PullHelperTests(unittest.TestCase):
 class BitablePullTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        init_db()
+        _reset_db()
 
     def _seed_course(self, db, reviewed: bool = False):
         course = Course(title="拉取测试课程", class_name="思辨二班", grade_level=4)
