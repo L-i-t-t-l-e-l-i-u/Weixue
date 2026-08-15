@@ -83,6 +83,35 @@ export default function App() {
         <div className="text-center">
           <div className="text-4xl mb-4">📭</div>
           <div>暂无课程数据。请先运行 <code className="bg-slate-200 px-2 py-1 rounded text-sm">python seed.py</code> 初始化。</div>
+          {/* 空态也必须能切模式：否则真实模式后端不可达时用户被锁死在空页 */}
+          <div className="mt-4 flex items-center justify-center gap-2">
+            <span className={`text-xs font-bold px-2 py-1 rounded ${
+              displayMode === 'real' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'
+            }`}>
+              {displayMode === 'real' ? '真实模式' : displayMode === 'demo' ? '演示模式' : '自动探测…'}
+            </span>
+            <div className="flex bg-slate-100 rounded-lg p-0.5">
+              <button
+                onClick={() => switchMode('demo')}
+                title="使用内置演示数据，无需后端"
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer
+                  ${displayMode === 'demo' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
+              >
+                演示
+              </button>
+              <button
+                onClick={() => switchMode('real')}
+                title="连接 FastAPI 后端"
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer
+                  ${displayMode === 'real' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
+              >
+                真实
+              </button>
+            </div>
+          </div>
+          {displayMode === 'real' && (
+            <div className="mt-2 text-xs">真实模式需要后端运行（python start.py），或切换到演示模式查看内置数据。</div>
+          )}
         </div>
       </div>
     );
