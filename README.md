@@ -14,15 +14,15 @@
 
 ### 1. 认知梯度 Rubric（Cognitive Gradient Rubric）
 
-抛弃"所有学生用同一套评分标准"的粗暴做法。基于 Kuhn（1999）的 Realist → Absolutist → Multiplist → Evaluativist 四阶段认识论模型，将 1-7 年级划分为三个认知梯段，每个梯段匹配不同的评估维度和行为锚点：
+抛弃"所有学生用同一套评分标准"的粗暴做法。基于 Kuhn（1999）的 Realist → Absolutist → Multiplist → Evaluativist 四阶段认识论模型，将 1-7 年级划分为三个认知梯段。三个梯段共用同一套五维核心标准——立意（观点鲜明）、选材（言之有物）、结构（条理清晰）、语言（用词准确）、视角（换位思考），梯段间的差异体现在评分指导注入的理论基础、评估原则、合格线口径与评语风格上：
 
-| 梯段 | 年级 | 核心维度 | 理论依据 |
+| 梯段 | 年级 | 合格线口径 | 理论依据 |
 |------|------|----------|----------|
-| 基础层 | 1-2 年级 | 清晰性、解释力、证据意识 | Byrnes & Dunbar (2014)：CT 前技能阶段 |
-| 发展层 | 3-5 年级 | 清晰性、相关性、因果推理、证据使用 | Absolutist → Multiplist 过渡期 |
-| 进阶层 | 6-7 年级 | 清晰性、相关性、论证质量、深度广度、反思调节 | Multiplist → Evaluativist 过渡期 |
+| 基础层 | 1-2 年级 | 敢说、说清楚：观点表达完整即视为达标 | Byrnes & Dunbar (2014)：CT 前技能阶段，不因缺乏逻辑推理扣分 |
+| 发展层 | 3-5 年级 | 围绕主题给出具体理由 | Absolutist → Multiplist 过渡期 |
+| 进阶层 | 6-7 年级 | 逻辑论证严谨：理由充分、反驳有力 | Multiplist → Evaluativist 过渡期，引入 McNeill CER 框架与 Osborne 论证等级模型 |
 
-每个维度下设 A+/A/A-/B+/B/B- 六级行为锚点，由 `rubric_loader.py` 在评估时动态组装为完整 prompt。论证质量维度引入 McNeill CER 框架 + Osborne 5 级评分，rebuttal 缺失硬性限制不超过 B+。
+每个维度下设 A+/A/A-/B+/B/B- 六级行为锚点，由 `rubric_loader.py` 在评估时动态组装为完整 prompt。进阶层的评分指导中设置反驳门槛：学生完全没有考虑反面观点或替代解释时，"结构"与"视角"两个维度的评级不得高于 B+。另设加分项"有自己 / 有新意"由 AI 以 bonus_flags 标记输出；明确不评流利度、好词好句与引经据典。
 
 ### 2. 双层评估流水线（Two-Layer Pipeline）
 
@@ -38,13 +38,13 @@
 AI 评估不应该"忘掉"教师的修正偏好。每当教师在批改页覆盖 AI 评分时，系统自动记录差异（AI 原评分 → 教师终评分 + 理由），存入 `calibration_records` 表。下次评估新回答时，`rubric_loader` 从数据库中取最近 10 条校准记录，以紧凑格式注入 LLM prompt 的 few-shot 区域：
 
 ```
-校准1  AI评分：清晰性A、解释力A-、证据意识B+
-       教师修正：清晰性B+、解释力A-、证据意识A-
-       教师理由：表达流畅但观点不够明确
+校准1  AI评分：立意A、选材A-、视角B+
+       教师修正：立意B+、选材A-、视角A-
+       教师理由：表达流畅但核心观点不够鲜明
 
-校准2  AI评分：论证质量A-、深度广度B+、反思调节B+
-       教师修正：论证质量B、深度广度B、反思调节B
-       教师理由：缺乏证据支撑，多为个人断言
+校准2  AI评分：结构A-、选材B+、视角B+
+       教师修正：结构B、选材B、视角B
+       教师理由：缺乏具体例子支撑，多为个人断言
 ```
 
 这不是量化蒸馏（"平均上调 0.5 级"对 LLM 没有意义），而是将教师的判断模式以自然语言形式传递给 AI，使评分倾向逐步向教师靠拢。
@@ -69,7 +69,7 @@ AI 评估不应该"忘掉"教师的修正偏好。每当教师在批改页覆盖
 |------|------|
 | 后端 | FastAPI + Uvicorn + SQLAlchemy |
 | 数据库 | SQLite |
-| LLM | OpenAI SDK（兼容 DashScope / DeepSeek / OpenAI） |
+| LLM | httpx 轻量适配器：OpenAI 兼容 Chat API（DashScope / DeepSeek / OpenAI）+ Anthropic Messages 风格 |
 | ASR | 可插拔（mock / qwen_asr / OpenAI / DashScope），详见 [docs/音频录入与转写.md](./docs/音频录入与转写.md) |
 | 前端 | React 18 + Vite + Zustand + Tailwind CSS |
 | 部署 | GitHub Pages（纯前端 demo 模式）/ FastAPI + 前端静态托管 |
@@ -200,14 +200,20 @@ python -m feishu.bootstrap_base   # 建 base + 4 表 + 写回 .env + 建字段�
 
 ### 更新纯前端 demo 数据
 
-在运行 `python seed.py` 后执行：
+在运行 `python seed.py` 后，依次执行（生成"真 AI 结果回放"快照）：
 
 ```bash
 cd backend
-python export_demo_data.py
+python assess_demo_data.py            # 用真实 LLM 评估全部作答（离线脚本，无需起后端；
+                                      #  --dry-run 可不调 LLM 干跑验证管线）
+python start.py --no-listener         # 起后端，在 UI 里批量生成评语、手动修改 2-3 条
+                                      #  教师评分（产生校准记录），完成后 Ctrl+C
+python prep_demo_summaries.py         # 用真实 LLM 预生成备课辅助的班级总结 + 分题总结
+                                      #  （与后端同一套 prompt，离线写入 prep_plans）
+python export_demo_data.py --replay-pending 3
 ```
 
-脚本会把当前 SQLite 数据导出到 `frontend/src/demo-data.json`。前后端统一采用 A+/A/A-/B+/B/B- 六级评分口径。
+`export_demo_data.py` 把当前 SQLite 数据导出到 `frontend/src/demo-data.json`（含评语草稿与预生成的备课总结）；`--replay-pending N` 将最新 N 条作答重置回未评估状态但保留 AI 结果（也可用 `--pending-ids 7,8,9` 指定），快照由此形成状态梯度：部分已评估/已批改（批改页、备课辅助开屏即有数据），部分待评估——演示模式下点击"开始评估"会以真实节奏回放这些预生成的 AI 结果（评分各异、推理链为真实 LLM 输出），备课辅助的"AI 总结"同样回放预生成的真实 LLM 文本（绿标"AI 生成"）。前后端统一采用 A+/A/A-/B+/B/B- 六级评分口径。
 
 ### 演示模式 / 真实模式一键切换
 

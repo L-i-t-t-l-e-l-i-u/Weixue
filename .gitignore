@@ -25,3 +25,4 @@ backend/data/grading.db.bak*
 .DS_Store
 tmp/
 .venv-powershell/
+*.tex

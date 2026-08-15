@@ -22,9 +22,20 @@ const ok = (d) => Promise.resolve(d);
 // v2：五维度重构后缓存结构变化，升版本让旧 localStorage 自动作废，避免新旧数据挤压。
 const STORAGE_KEY = 'weixue-demo-data-v2';
 
+// Signature of the BUNDLED dataset: any snapshot change redeploys a new bundle,
+// which must invalidate every cached copy older than itself (returning visitors
+// would otherwise be pinned to the FIRST dataset their browser ever cached).
+const _bundleSig = (() => {
+  const s = JSON.stringify(demoData);
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) + s.charCodeAt(i)) >>> 0;
+  return `sig-${h.toString(36)}-${s.length}`;
+})();
+
 function _persist() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      sig: _bundleSig,
       data: _data, status: _status, dialogue: _dialogue, suggestion: _lastSuggestion,
     }));
   } catch { /* quota/security errors ignored */ }
@@ -35,6 +46,7 @@ function _hydrate() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     const saved = JSON.parse(raw);
+    if (saved.sig !== _bundleSig) return; // stale cache from an older deploy
     if (saved.data) _data = saved.data;
     if (saved.status) Object.assign(_status, saved.status);
     if (saved.dialogue) Object.assign(_dialogue, saved.dialogue);
@@ -505,22 +517,93 @@ export const getStudentReport = (sid) => {
   });
 };
 
-// ── Assessment (no-op in demo) ──────────────────────────
-export const assessCourse = (cid) => ok({ assessed: 0, skipped: 0 });
-export const getAssessmentProgress = (cid) =>
-  ok({
-    completed: _data.responses.length,
-    total: _data.responses.length,
-    active: false,
-    llm_calls: 0,
-    skipped: 0,
-    errors: 0,
+// ── Assessment (scripted replay in demo) ────────────────
+// The demo snapshot ships real LLM results with processing_status reset to
+// not_started (export_demo_data.py --replay-pending). "Assessing" replays
+// them at a believable pace, so the batch button does something meaningful
+// on GitHub Pages. Responses typed in live during the demo (no stored
+// result) fall back to the same mock fill assessOne uses.
+const _simProgress = {}; // { [cid]: {completed,total,active,llm_calls,skipped,errors} }
+
+const _courseResponseIds = (cid) => {
+  const studentIds = new Set(
+    _data.students.filter(s => s.course_id === cid).map(s => s.id),
+  );
+  return _data.responses
+    .filter(r => studentIds.has(r.student_id))
+    .map(r => r.id);
+};
+
+const _respStatus = (r) => r.processing_status || _status[r.id] || 'not_started';
+
+export const assessCourse = (cid) => {
+  const studentIds = new Set(
+    _data.students.filter(s => s.course_id === cid).map(s => s.id),
+  );
+  const targets = _data.responses.filter(r =>
+    studentIds.has(r.student_id)
+    && !r.teacher_reviewed
+    && _respStatus(r) === 'not_started');
+
+  if (targets.length === 0) {
+    return ok({ status: 'completed', total: 0, need_assessment: 0 });
+  }
+  if (_simProgress[cid] && _simProgress[cid].active) {
+    return Promise.reject(new Error('Assessment already in progress'));
+  }
+  _simProgress[cid] = {
+    completed: 0, total: targets.length, active: true,
+    llm_calls: 0, skipped: 0, errors: 0,
+  };
+
+  let offset = 400;
+  targets.forEach((resp) => {
+    // not_started → processing → processed, at the pace of a real LLM call.
+    setTimeout(() => {
+      _status[resp.id] = 'processing';
+      _persist();
+    }, offset);
+    const finishAt = offset + 500 + Math.random() * 400;
+    setTimeout(() => {
+      const scores = resp.ai_dimension_scores || { ...MOCK_SCORES };
+      resp.ai_dimension_scores = scores;
+      resp.ai_confidence = resp.ai_confidence || 'certain_good';
+      resp.ai_suggested_tags = resp.ai_suggested_tags || [];
+      if (!resp.cleaned_text) resp.cleaned_text = resp.raw_text || '';
+      resp.teacher_reviewed = false;
+      resp.teacher_rating = resp.teacher_rating || '';
+      resp.processing_status = 'processed';
+      _status[resp.id] = 'processed';
+      _simProgress[cid].completed += 1;
+      _simProgress[cid].llm_calls += 1;
+      _persist();
+    }, finishAt);
+    offset += 1400 + Math.random() * 900;
   });
+  setTimeout(() => {
+    if (_simProgress[cid]) _simProgress[cid].active = false;
+    _persist();
+  }, offset + 300);
+
+  return ok({ status: 'started', total: targets.length, need_assessment: targets.length });
+};
+
+export const getAssessmentProgress = (cid) => {
+  const sim = _simProgress[cid];
+  if (sim) return ok({ ...sim });
+  // After a page reload the in-memory simulation is gone; report the durable
+  // state instead (already-processed rows), matching the "finished" shape.
+  const ids = new Set(_courseResponseIds(cid));
+  const done = _data.responses
+    .filter(r => ids.has(r.id) && _respStatus(r) === 'processed').length;
+  return ok({ completed: done, total: done, active: false, llm_calls: 0, skipped: 0, errors: 0 });
+};
 export const resetCourse = (cid) => {
   _data = _clone(_pristine);
   Object.keys(_status).forEach(k => delete _status[k]);
   Object.keys(_dialogue).forEach(k => delete _dialogue[k]);
   Object.keys(_lastSuggestion).forEach(k => delete _lastSuggestion[k]);
+  Object.keys(_simProgress).forEach(k => delete _simProgress[k]);
   try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
   return ok({ ok: true });
 };
@@ -544,6 +627,11 @@ export const clearCourseResponses = (cid) => {
   Object.keys(_lastSuggestion).forEach(k => { if (!keptIds.has(Number(k))) delete _lastSuggestion[k]; });
   // 备课辅助的讲评计划（顺序/备注/总结）一并清掉。
   try { localStorage.removeItem(`weixue-prep-plan-${cid}`); } catch { /* ignore */ }
+  if (_simProgress[cid]) {
+    // A running replay may still flip freed rows harmlessly; just stop
+    // advertising progress for the cleared data.
+    _simProgress[cid].active = false;
+  }
   _persist();
   return ok({ ok: true, responses_cleared: removedIds.size });
 };
@@ -558,7 +646,13 @@ export const generateComment = (cid, studentId) => {
   student.comment_delivery_error = '';
   student.comment_delivered_at = null;
   _persist();
-  return ok({ student_id: studentId, draft: student.comment_draft || '' });
+  // Replay the stored draft at LLM-ish latency so the instant return doesn't
+  // break the illusion on stage.
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve({ student_id: studentId, draft: student.comment_draft || '' });
+    }, 1100 + Math.random() * 700);
+  });
 };
 export const saveCommentDraft = (cid, studentId, draft) => {
   const student = _data.students.find(s => s.id === studentId && s.course_id === cid);
@@ -633,8 +727,73 @@ export const getPrepInsights = (cid) => {
   return ok(computePrepInsights(students, topics, responses, cid));
 };
 
+// LLM-ish latency for canned replays so the instant return doesn't break the
+// illusion on stage.
+const _llmLatency = (base = 1300) =>
+  new Promise(resolve => setTimeout(resolve, base + Math.random() * 1100));
+
+// Prep plans pre-generated OFFLINE with the real LLM (backend
+// prep_demo_summaries.py) and embedded in demo-data.json (prep_plans) by
+// export_demo_data.py — the demo replays REAL AI text, not templates.
+const _embeddedPlans = (() => {
+  const parse = (v, fallback) => {
+    if (v == null) return fallback;
+    if (typeof v !== 'string') return v;
+    try { return JSON.parse(v); } catch { return fallback; }
+  };
+  const plans = {};
+  (demoData.prep_plans || []).forEach(p => {
+    plans[p.course_id] = {
+      course_id: p.course_id,
+      lesson_plan: parse(p.lesson_plan, []),
+      notes: parse(p.notes, {}),
+      confirmed: !!p.confirmed,
+      summary: parse(p.summary, {}),
+      updated_at: p.updated_at || null,
+    };
+  });
+  return plans;
+})();
+
+function _readPlan(cid) {
+  try {
+    const raw = localStorage.getItem(_planKey(cid));
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    if (saved.sig !== _bundleSig) return null; // stale plan from an older deploy
+    return saved;
+  } catch { /* corrupted storage ignored */ }
+  return null;
+}
+
+function _writePlan(cid, plan) {
+  try {
+    localStorage.setItem(_planKey(cid), JSON.stringify({ ...plan, sig: _bundleSig }));
+  } catch { /* quota/security errors ignored */ }
+}
+
+function _persistSummary(cid, summary) {
+  // Same semantics as the real backend: persist on generate (keep any
+  // already-generated per-topic summaries).
+  const plan = { lesson_plan: [], notes: {}, confirmed: false, summary: {} };
+  const stored = _readPlan(cid);
+  if (stored) Object.assign(plan, stored);
+  plan.summary = { ...(plan.summary || {}), ...summary };
+  plan.savedAt = new Date().toISOString();
+  _writePlan(cid, plan);
+  return summary;
+}
+
 // 演示模式没有 LLM：用与后端 _template_prep_summary 相同的规则生成确定性总结。
 export const generatePrepSummary = (cid) => {
+  // Prefer the pre-generated REAL LLM summary embedded in the snapshot; the
+  // deterministic template below is only a fallback when none was exported.
+  const canned = _embeddedPlans[cid];
+  const llmSummary = canned && canned.summary && canned.summary.generated_by === 'llm'
+    ? canned.summary : null;
+  if (llmSummary) {
+    return _llmLatency().then(() => ok(_persistSummary(cid, _clone(llmSummary))));
+  }
   const { students, topics, responses } = _courseData(cid);
   const insights = computePrepInsights(students, topics, responses, cid);
   const p = insights.participation;
@@ -679,14 +838,7 @@ export const generatePrepSummary = (cid) => {
     generated_by: 'template',
     generated_at: new Date().toISOString(),
   };
-  // 与真实后端一致：生成即持久化（保留已生成的分题总结）。
-  const plan = { lesson_plan: [], notes: {}, confirmed: false, summary: {} };
-  const stored = _readPlan(cid);
-  if (stored) Object.assign(plan, stored);
-  plan.summary = { ...(plan.summary || {}), ...summary };
-  plan.savedAt = new Date().toISOString();
-  try { localStorage.setItem(_planKey(cid), JSON.stringify(plan)); } catch { /* ignore */ }
-  return ok(summary);
+  return ok(_persistSummary(cid, summary));
 };
 
 // ── Prep Plan (备课辅助 · 讲评计划) ─────────────────────
@@ -694,44 +846,44 @@ export const generatePrepSummary = (cid) => {
 const _planKey = (cid) => `weixue-prep-plan-${cid}`;
 
 export const getPrepPlan = (cid) => {
-  try {
-    const raw = localStorage.getItem(_planKey(cid));
-    if (raw) {
-      const saved = JSON.parse(raw);
-      const lessonPlan = Array.isArray(saved.lesson_plan)
-        ? saved.lesson_plan
-        : Array.isArray(saved.lessonPlan) ? saved.lessonPlan : [];
-      if (lessonPlan.length || saved.notes) {
-        return ok({
-          course_id: cid,
-          lesson_plan: lessonPlan,
-          notes: saved.notes || {},
-          confirmed: !!saved.confirmed,
-          summary: saved.summary || {},
-          updated_at: saved.savedAt || saved.updated_at || null,
-        });
-      }
-    }
-  } catch { /* corrupted storage ignored */ }
+  const saved = _readPlan(cid);
+  if (saved) {
+    const lessonPlan = Array.isArray(saved.lesson_plan)
+      ? saved.lesson_plan
+      : Array.isArray(saved.lessonPlan) ? saved.lessonPlan : [];
+    return ok({
+      course_id: cid,
+      lesson_plan: lessonPlan,
+      notes: saved.notes || {},
+      confirmed: !!saved.confirmed,
+      summary: saved.summary || {},
+      updated_at: saved.savedAt || saved.updated_at || null,
+    });
+  }
+  // No teacher draft yet: seed from the pre-generated embedded plan, so the
+  // page opens with the REAL AI summaries already in place — same as a teacher
+  // who generated them in a previous session on the real backend.
+  const embedded = _embeddedPlans[cid];
+  if (embedded
+    && (Object.keys(embedded.summary || {}).length > 0
+      || (embedded.lesson_plan || []).length > 0)) {
+    return ok(_clone(embedded));
+  }
   return ok({ course_id: cid, lesson_plan: [], notes: {}, confirmed: false, summary: {}, updated_at: null });
 };
 
 export const savePrepPlan = (cid, data) => {
-  let prev = null;
-  try {
-    const raw = localStorage.getItem(_planKey(cid));
-    if (raw) prev = JSON.parse(raw);
-  } catch { /* ignore */ }
+  const prev = _readPlan(cid);
+  const embedded = _embeddedPlans[cid];
   const plan = {
     lesson_plan: data.lesson_plan || [],
     notes: data.notes || {},
     confirmed: !!data.confirmed,
-    summary: data.summary || (prev && prev.summary) || {},
+    summary: data.summary || (prev && prev.summary)
+      || (embedded && embedded.summary) || {},
     savedAt: new Date().toISOString(),
   };
-  try {
-    localStorage.setItem(_planKey(cid), JSON.stringify(plan));
-  } catch { /* quota/security errors ignored */ }
+  _writePlan(cid, plan);
   return ok({ course_id: cid, ...plan, updated_at: plan.savedAt });
 };
 
@@ -758,15 +910,25 @@ const _templateTopicSummary = (row, highlights) => {
   return { overview: `本题各维度均分：${dims}。`, problems, suggestions, generated_by: 'template' };
 };
 
-const _readPlan = (cid) => {
-  try {
-    const raw = localStorage.getItem(_planKey(cid));
-    if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
-  return null;
-};
-
 export const generateTopicSummary = (cid, tid) => {
+  // Prefer the pre-generated REAL LLM summary embedded in the snapshot.
+  const embedded = _embeddedPlans[cid];
+  const cannedTopics = embedded && embedded.summary && embedded.summary.topics;
+  const canned = cannedTopics && cannedTopics[String(tid)]
+    && cannedTopics[String(tid)].generated_by === 'llm'
+    ? cannedTopics[String(tid)] : null;
+  const persist = (summary) => {
+    const plan = { lesson_plan: [], notes: {}, confirmed: false, summary: {} };
+    const stored = _readPlan(cid);
+    if (stored) Object.assign(plan, stored);
+    const topicsMap = { ...((plan.summary && plan.summary.topics) || {}) };
+    topicsMap[String(tid)] = summary;
+    plan.summary = { ...(plan.summary || {}), topics: topicsMap };
+    plan.savedAt = new Date().toISOString();
+    _writePlan(cid, plan);
+    return summary;
+  };
+  if (canned) return _llmLatency(1100).then(() => ok(persist(_clone(canned))));
   const { students, topics, responses } = _courseData(cid);
   const insights = computePrepInsights(students, topics, responses, cid);
   const row = computePrepAnalytics(students, topics, responses)
@@ -776,15 +938,7 @@ export const generateTopicSummary = (cid, tid) => {
     ..._templateTopicSummary(row, hl),
     generated_at: new Date().toISOString(),
   };
-  const plan = { lesson_plan: [], notes: {}, confirmed: false, summary: {} };
-  const stored = _readPlan(cid);
-  if (stored) Object.assign(plan, stored);
-  const topicsMap = { ...((plan.summary && plan.summary.topics) || {}) };
-  topicsMap[String(tid)] = summary;
-  plan.summary = { ...(plan.summary || {}), topics: topicsMap };
-  plan.savedAt = new Date().toISOString();
-  try { localStorage.setItem(_planKey(cid), JSON.stringify(plan)); } catch { /* ignore */ }
-  return ok(summary);
+  return ok(persist(summary));
 };
 
 export const savePrepSummary = (cid, data) => {
@@ -809,7 +963,7 @@ export const savePrepSummary = (cid, data) => {
   }
   plan.summary = summary;
   plan.savedAt = new Date().toISOString();
-  try { localStorage.setItem(_planKey(cid), JSON.stringify(plan)); } catch { /* ignore */ }
+  _writePlan(cid, plan);
   return ok(summary);
 };
 

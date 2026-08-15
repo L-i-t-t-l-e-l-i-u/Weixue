@@ -134,7 +134,10 @@ export function computePrepInsights(students, topics, responses, courseId) {
   const studentAvgs = [];
   const studentGrades = [];
   students.forEach(st => {
-    const entry = (tierRaw[st.cognitive_tier] ||= { students: 0, scores: [], weak_students: 0 });
+    // students 表无 cognitive_tier 字段；与 computeClassReport 一致按年级推导（1-2/3-5/6-7）。
+    const tier = st.cognitive_tier
+      || (st.grade <= 2 ? 'basic' : st.grade <= 5 ? 'developing' : 'advancing');
+    const entry = (tierRaw[tier] ||= { students: 0, scores: [], weak_students: 0 });
     entry.students += 1;
     const vals = [];
     inCourse.filter(r => r.student_id === st.id).forEach(r => {
@@ -184,11 +187,11 @@ export function computePrepInsights(students, topics, responses, courseId) {
     const vals = Object.values(scores).map(ratingToNumber).filter(v => v !== null);
     if (!vals.length) return;
     const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-    // 优质发言 = 高于该生年级合格线至少半档（1-3年级 ≥3.0，4-6年级 ≥3.5）。
-    if (avg < passLineForGrade(student.grade) + 0.5) return;
     const topic = topics.find(t => t.id === r.topic_id);
     const student = studentMap.get(r.student_id);
     if (!topic || !student) return;
+    // 优质发言 = 高于该生年级合格线至少半档（1-3年级 ≥3.0，4-6年级 ≥3.5）。
+    if (avg < passLineForGrade(student.grade) + 0.5) return;
     candidates.push({
       topic_id: topic.id,
       topic_title: topic.title,
