@@ -123,12 +123,7 @@ Weixue/
 │   ├── 技术实现章节素材.md            # 参赛方案"技术实现"章节素材（供统稿）
 │   ├── 现场伴学设计与前端重构方案_v1.md  # 课堂伴学/学生端设计方案
 │   ├── 飞书教师与学生_open_id_配置与验收.md
-│   └── old/                         # 历史/过时文档归档（开题报告、验收记录等）
-├── papers/                    # 核心参考文献
-│   ├── Kuhn_1999_*.pdf        # 认识论发展阶段模型
-│   ├── Byrnes_Dunbar_2014_*.pdf  # CT 前技能与认知发展
-│   ├── McNeill_2011_*.pdf     # CER 框架与科学论证
-│   └── Osborne_2004_*.pdf     # Toulmin 论证分析框架
+│   └── old/                         # 参赛方案（40强赛）草稿
 ```
 
 ## 快速开始
@@ -196,7 +191,7 @@ cd backend
 python -m feishu.bootstrap_base   # 建 base + 4 表 + 写回 .env + 建字段选项 + 全量同步（幂等可重跑）
 ```
 
-`FEISHU_BITABLE_APP_TOKEN` 与 `FEISHU_BITABLE_TABLE_IDS` 由引导脚本自动写回 `.env`；未配置时同步保持 `deferred`，不会伪装为已接通，`GET /api/feishu/bitable/status` 可查看实时状态。联调细节与踩坑记录见 [docs/old/多维表格联调记录_2026-08-10.md](./docs/old/多维表格联调记录_2026-08-10.md)。
+`FEISHU_BITABLE_APP_TOKEN` 与 `FEISHU_BITABLE_TABLE_IDS` 由引导脚本自动写回 `.env`；未配置时同步保持 `deferred`，不会伪装为已接通，`GET /api/feishu/bitable/status` 可查看实时状态。
 
 ### 更新纯前端 demo 数据
 
